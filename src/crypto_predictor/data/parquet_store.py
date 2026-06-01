@@ -6,10 +6,19 @@ from pathlib import Path
 import pandas as pd
 
 
+def safe_symbol(symbol: str) -> str:
+    """Sanitize a ccxt unified symbol for filesystem path use.
+
+    'BTC/USDT:USDT' -> 'BTC_USDT_USDT'
+    'BTC-USDT-SWAP' -> 'BTC-USDT-SWAP' (already safe)
+    """
+    return symbol.replace("/", "_").replace(":", "_")
+
+
 def parquet_path(root: Path, symbol: str, timeframe: str,
                  data_kind: str = "ohlcv") -> Path:
     """Return the canonical parquet path for (data_kind, symbol, timeframe)."""
-    return root / data_kind / symbol / f"{timeframe}.parquet"
+    return root / data_kind / safe_symbol(symbol) / f"{timeframe}.parquet"
 
 
 def write_ohlcv(root: Path, symbol: str, timeframe: str,

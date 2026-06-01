@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from crypto_predictor.data.parquet_store import (
-    parquet_path, write_ohlcv, read_ohlcv, append_ohlcv,
+    parquet_path, write_ohlcv, read_ohlcv, append_ohlcv, safe_symbol,
 )
 
 
@@ -46,3 +46,16 @@ def test_append_dedups_on_timestamp(tmp_path: Path):
 def test_read_missing_returns_empty(tmp_path: Path):
     out = read_ohlcv(tmp_path, "NOPE", "1h")
     assert out.empty
+
+
+def test_safe_symbol_replaces_slash_and_colon():
+    assert safe_symbol("BTC/USDT:USDT") == "BTC_USDT_USDT"
+
+
+def test_safe_symbol_passes_through_safe_input():
+    assert safe_symbol("BTC-USDT-SWAP") == "BTC-USDT-SWAP"
+
+
+def test_parquet_path_uses_safe_symbol(tmp_path: Path):
+    p = parquet_path(tmp_path, "BTC/USDT:USDT", "1h", "ohlcv")
+    assert p == tmp_path / "ohlcv" / "BTC_USDT_USDT" / "1h.parquet"
