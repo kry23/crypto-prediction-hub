@@ -6,7 +6,9 @@
   "plugins": [
     {
       "name": "crypto-predictor",
-      "source": "."
+      "description": "Heuristic-first probabilistic prediction for OKX-Global USDT perpetuals — daily universe scan, calibrated direction + magnitude predictions, self-validating track record.",
+      "source": "./",
+      "strict": false
     }
   ]
 }
