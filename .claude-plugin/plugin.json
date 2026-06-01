@@ -1,0 +1,15 @@
+{
+  "name": "crypto-predictor",
+  "version": "0.1.0",
+  "description": "Heuristic-first probabilistic prediction for OKX-Global USDT perpetuals — daily universe scan, calibrated direction + magnitude predictions, self-validating track record.",
+  "author": {
+    "name": "Koray Korkmaz"
+  },
+  "license": "MIT",
+  "mcpServers": {
+    "crypto-predictor": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/.venv/Scripts/python.exe",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/crypto_predictor/mcp/server.py"]
+    }
+  }
+}
