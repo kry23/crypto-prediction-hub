@@ -1,0 +1,58 @@
+[project]
+name = "crypto-predictor"
+version = "0.1.0"
+description = "Heuristic-first probabilistic prediction platform for OKX-Global USDT perpetuals."
+authors = [{name = "Koray Korkmaz"}]
+license = {text = "MIT"}
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "fastmcp>=0.2.0",
+    "apscheduler>=3.10.0",
+    "ccxt>=4.4.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "pyarrow>=15.0.0",
+    "scikit-learn>=1.4.0",
+    "scipy>=1.12.0",
+    "structlog>=24.1.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.1",
+    "tenacity>=8.2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+    "mypy>=1.9.0",
+    "freezegun>=1.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crypto_predictor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/crypto_predictor"]
+ignore_missing_imports = true
