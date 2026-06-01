@@ -1,0 +1,12 @@
+{
+  "name": "crypto-predictor-marketplace",
+  "owner": {
+    "name": "Koray Korkmaz"
+  },
+  "plugins": [
+    {
+      "name": "crypto-predictor",
+      "source": "."
+    }
+  ]
+}
