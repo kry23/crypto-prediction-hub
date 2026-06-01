@@ -12,6 +12,46 @@ log = structlog.get_logger(__name__)
 OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
+def ccxt_to_okx_instid(symbol: str) -> str:
+    """Map ccxt unified perp symbol to OKX native instId.
+
+    'BTC/USDT:USDT' -> 'BTC-USDT-SWAP'
+    'BTC-USDT-SWAP' -> 'BTC-USDT-SWAP' (already native, returned unchanged)
+    """
+    if "/" not in symbol and ":" not in symbol:
+        return symbol  # already native
+    base, rest = symbol.split("/", 1)
+    quote, _, settle = rest.partition(":")
+    return f"{base}-{quote}-SWAP"
+
+
+def ccxt_to_base_ccy(symbol: str) -> str:
+    """Extract base currency code from any supported symbol format.
+
+    'BTC/USDT:USDT' -> 'BTC'
+    'BTC-USDT-SWAP' -> 'BTC'
+    'BTCUSDT'        -> 'BTCUSDT' (best effort, no separator found)
+    """
+    for sep in ("/", "-"):
+        if sep in symbol:
+            return symbol.split(sep)[0]
+    return symbol
+
+
+def ccxt_to_okx_uly(symbol: str) -> str:
+    """Map any supported perp symbol to OKX `uly` (underlying) format.
+
+    'BTC/USDT:USDT' -> 'BTC-USDT'
+    'BTC-USDT-SWAP' -> 'BTC-USDT'
+    'BTC-USDT'       -> 'BTC-USDT' (already uly)
+    """
+    instid = ccxt_to_okx_instid(symbol)
+    # instid is now BASE-QUOTE-SWAP or already native; strip the -SWAP suffix
+    if instid.endswith("-SWAP"):
+        return instid[: -len("-SWAP")]
+    return instid
+
+
 @retry(stop=stop_after_attempt(5),
        wait=wait_exponential(multiplier=1, min=1, max=30))
 def _fetch_with_retry(client, symbol: str, timeframe: str,
@@ -90,7 +130,7 @@ def fetch_long_short_ratio(http_client, symbol: str, *,
     whose .json() yields {"data": [{"ts": str, "longShortRatio": str}, ...]}.
     """
     url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
-    params = {"ccy": symbol.split("-")[0], "period": period, "limit": limit}
+    params = {"ccy": ccxt_to_base_ccy(symbol), "period": period, "limit": limit}
     resp = http_client.get(url, params=params)
     if resp.status_code != 200:
         log.warning("ls_ratio_fetch_failed", symbol=symbol, status=resp.status_code)
@@ -98,10 +138,18 @@ def fetch_long_short_ratio(http_client, symbol: str, *,
     data = resp.json().get("data", [])
     if not data:
         return pd.DataFrame(columns=["timestamp", "ls_ratio"])
-    df = pd.DataFrame([
-        {"timestamp": int(r["ts"]), "ls_ratio": float(r["longShortRatio"])}
-        for r in data
-    ])
+    # OKX returns rows in either of two shapes depending on endpoint variant:
+    #   - list/tuple: [ts_str, ratio_str]
+    #   - dict:       {"ts": ts_str, "longShortRatio": ratio_str}
+    rows = []
+    for r in data:
+        if isinstance(r, dict):
+            ts = r.get("ts")
+            ratio = r.get("longShortRatio") or r.get("ratio")
+        else:  # list/tuple
+            ts, ratio = r[0], r[1]
+        rows.append({"timestamp": int(ts), "ls_ratio": float(ratio)})
+    df = pd.DataFrame(rows)
     return df.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
 
 
@@ -109,7 +157,14 @@ def fetch_long_short_ratio(http_client, symbol: str, *,
 def fetch_liquidations(http_client, symbol: str, since_ms: int) -> pd.DataFrame:
     """Fetch liquidation events from OKX public API."""
     url = "https://www.okx.com/api/v5/public/liquidation-orders"
-    params = {"instType": "SWAP", "instId": symbol, "before": str(since_ms)}
+    # OKX public liquidation-orders requires `uly` (e.g. BTC-USDT) for SWAP,
+    # not `instId`. `state=filled` is also required.
+    params = {
+        "instType": "SWAP",
+        "uly": ccxt_to_okx_uly(symbol),
+        "state": "filled",
+        "before": str(since_ms),
+    }
     resp = http_client.get(url, params=params)
     if resp.status_code != 200:
         log.warning("liquidations_fetch_failed", symbol=symbol, status=resp.status_code)
@@ -118,7 +173,12 @@ def fetch_liquidations(http_client, symbol: str, since_ms: int) -> pd.DataFrame:
     rows = []
     for blk in blocks:
         for d in blk.get("details", []):
-            size_usdt = float(d["sz"]) * float(d["bkPx"])
+            try:
+                sz = float(d.get("sz") or 0)
+                bk_px = float(d.get("bkPx") or 0)
+            except (TypeError, ValueError):
+                continue
+            size_usdt = sz * bk_px
             rows.append({
                 "timestamp": int(d["ts"]),
                 "side": d["side"],
