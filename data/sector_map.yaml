@@ -1,0 +1,26 @@
+# data/sector_map.yaml — Phase 1 seed; expand as needed
+btc:
+  - BTC-USDT-SWAP
+eth:
+  - ETH-USDT-SWAP
+defi:
+  - AAVE-USDT-SWAP
+  - UNI-USDT-SWAP
+  - CRV-USDT-SWAP
+  - MKR-USDT-SWAP
+  - SUSHI-USDT-SWAP
+  - COMP-USDT-SWAP
+  - SNX-USDT-SWAP
+  - LDO-USDT-SWAP
+  - 1INCH-USDT-SWAP
+l1:
+  - SOL-USDT-SWAP
+  - AVAX-USDT-SWAP
+  - DOT-USDT-SWAP
+  - ATOM-USDT-SWAP
+  - NEAR-USDT-SWAP
+  - APT-USDT-SWAP
+  - SUI-USDT-SWAP
+  - ADA-USDT-SWAP
+  - BNB-USDT-SWAP
+  - TRX-USDT-SWAP
