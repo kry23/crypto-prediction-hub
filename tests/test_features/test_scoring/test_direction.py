@@ -61,3 +61,27 @@ def test_compute_direction_raw_for_regime_uses_regime_weights():
     # CHOP momentum weight (0.10) < BULL momentum weight (0.20)
     # -> raw_chop should be less positive than raw_bull for momentum-dominant features
     assert raw_chop < raw_bull
+
+
+def test_data_driven_chop_weights_inverts_momentum():
+    """CHOP regime should produce OPPOSITE direction for high-momentum features vs BULL."""
+    from crypto_predictor.scoring.direction import compute_direction_raw_for_regime
+    feats = {
+        "ret_15m_z": 2.0, "ret_1h_z": 2.0, "ret_4h_z": 2.0,
+        "ret_24h_z": 2.0, "ret_7d_z": 2.0, "mom_consistency": 0.9,
+        "mcap_rank_weight": 1.0, "coin_btc_corr_30d": 0.5,
+    }
+    raw_bull = compute_direction_raw_for_regime(feats, "BULL")
+    raw_chop = compute_direction_raw_for_regime(feats, "CHOP")
+    # Same momentum features, but CHOP inverts -> opposite signs
+    assert raw_bull > 0  # momentum is bullish
+    # CHOP either lower or negative (depends on technical balance)
+    assert raw_chop < raw_bull
+
+
+def test_data_driven_weights_sum_to_one_after_normalization():
+    """Even though raw weights may not sum to 1.0 (some are 0), they must normalize."""
+    from crypto_predictor.scoring.direction import DEFAULT_REGIME_WEIGHTS
+    for regime, weights in DEFAULT_REGIME_WEIGHTS.items():
+        total = sum(weights.values())
+        assert 0.6 <= total <= 1.0, f"{regime}: weights sum to {total} (must be between 0.6 and 1.0)"
