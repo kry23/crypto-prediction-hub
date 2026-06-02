@@ -32,3 +32,14 @@ def actual_return(*, root: Path, symbol: str,
     if p0 <= 0 or p1 <= 0:
         return None
     return math.log(p1 / p0)
+
+
+def actual_returns_batch(*, root,
+                         items) -> list[float | None]:
+    """Resolve actual_return for a batch of (symbol, start_time, horizon_hours) tuples."""
+    out: list[float | None] = []
+    for sym, start_time, horizon in items:
+        out.append(actual_return(root=root, symbol=sym,
+                                  start_time=start_time,
+                                  horizon_hours=horizon))
+    return out
