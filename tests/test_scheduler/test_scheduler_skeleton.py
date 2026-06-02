@@ -8,6 +8,7 @@ def test_scheduler_has_four_jobs():
     assert "validate_pending" in names
     assert "weekly_metrics" in names
     assert "recalibrate" in names
+    assert "incremental_ingest" in names
     sched.shutdown(wait=False)
 
 

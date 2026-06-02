@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import ccxt
+import httpx
 import structlog
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,6 +19,10 @@ from crypto_predictor.orchestrator.universe import (
 )
 from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
 from crypto_predictor.validation.validator import validate_pending_predictions
+from scripts.incremental_ingest import (
+    incremental_symbol_futures,
+    incremental_symbol_timeframe,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -156,11 +161,43 @@ def _job_recalibrate() -> None:
     log.info("recalibrate_job_done", phase="1_scaffold_only")
 
 
+def _job_incremental_ingest() -> None:
+    """Refresh OHLCV + futures data since last ingest (06:15 UTC)."""
+    project_root = Path(os.environ.get(
+        "CRYPTO_PREDICTOR_ROOT",
+        Path(__file__).resolve().parents[3],
+    ))
+    root = project_root / "data" / "history"
+    root.mkdir(parents=True, exist_ok=True)
+    okx = ccxt.okx({"enableRateLimit": True})
+    http = httpx.Client(timeout=30.0)
+    symbols = list_active_perps(okx)
+    log.info("incremental_ingest_start", n_symbols=len(symbols))
+    total = 0
+    for sym in symbols:
+        try:
+            for tf in ["15m", "1h", "4h", "1d"]:
+                total += incremental_symbol_timeframe(
+                    client=okx, root=root, symbol=sym, timeframe=tf,
+                    fallback_days=30,
+                )
+            incremental_symbol_futures(
+                ccxt_client=okx, http_client=http, root=root,
+                symbol=sym, fallback_days=30,
+            )
+        except Exception as exc:
+            log.warning("ingest_symbol_failed", symbol=sym, error=str(exc))
+    log.info("incremental_ingest_done", total_new_bars=total)
+
+
 def build_scheduler() -> BackgroundScheduler:
     """Build scheduler with all four Phase-1 jobs registered (no-ops until later plans)."""
     sched = BackgroundScheduler(timezone="UTC")
     sched.add_job(_job_predict_scan,
                   CronTrigger(hour=6, minute=0), id="predict_scan", replace_existing=True)
+    sched.add_job(_job_incremental_ingest,
+                  CronTrigger(hour=6, minute=15), id="incremental_ingest",
+                  replace_existing=True)
     sched.add_job(_job_validate_pending,
                   CronTrigger(hour=6, minute=30), id="validate_pending", replace_existing=True)
     sched.add_job(_job_weekly_metrics,
