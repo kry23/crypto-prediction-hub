@@ -84,3 +84,40 @@ def test_run_daily_scan_persists_predictions(tmp_path: Path):
         assert 0.0 <= p_direction <= 1.0
         assert flag in ("NORMAL", "HIGH_CONV", "WILD_CARD")
         assert status == "pending"
+
+
+def test_target_value_sign_matches_prediction_direction(tmp_path: Path):
+    """After 9.1 fix: prediction='down' implies target_value <= 0 (and vice versa)."""
+    _seed(tmp_path, n_symbols=3)
+    sector_map = tmp_path / "sector_map.yaml"
+    sector_map.write_text("l1:\n" + "\n".join(
+        f"  - FAKE{i}/USDT:USDT" for i in range(3)
+    ) + "\n")
+    db = tmp_path / "predictions.db"
+    init_predictions_db(db)
+    asof = datetime.fromtimestamp(
+        (1700000000000 + 2400 * 3600 * 1000) / 1000, tz=timezone.utc
+    )
+    run_daily_scan(
+        history_root=tmp_path,
+        sentiment_cache=tmp_path / "sentiment.db",
+        global_cache=tmp_path / "global.db",
+        sector_map=sector_map,
+        predictions_db=db,
+        calibration_path=None,
+        symbols=[f"FAKE{i}/USDT:USDT" for i in range(3)],
+        mcap_ranks={f"FAKE{i}/USDT:USDT": 1 for i in range(3)},
+        asof=asof,
+        formula_version="v1.5",
+    )
+    import sqlite3
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT prediction, target_value FROM predictions"
+    ).fetchall()
+    conn.close()
+    for prediction, target in rows:
+        if prediction == "up":
+            assert target >= 0, f"prediction=up but target={target}"
+        else:
+            assert target <= 0, f"prediction=down but target={target}"

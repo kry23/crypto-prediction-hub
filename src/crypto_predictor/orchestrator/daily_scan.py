@@ -73,8 +73,12 @@ def run_daily_scan(*, history_root: Path,
 
             raw = compute_direction_raw_for_regime(feats, regime)
             p_up = predict_probability(calibs, raw_score=raw, regime=regime)
+            # Direction sign comes from CALIBRATED probability, not raw.
+            # This guarantees sign(expected_ret) == sign(p_up - 0.5),
+            # so prediction == "up" iff target_value > 0.
+            calibrated_direction_for_magnitude = max(-1.0, min(1.0, (p_up - 0.5) * 2.0))
             expected_ret = compute_expected_return(
-                fetcher, sym, direction_raw=raw, regime=regime
+                fetcher, sym, direction_raw=calibrated_direction_for_magnitude, regime=regime
             )
             anomalous = is_anomalous(feats)
             prediction = "up" if p_up >= 0.5 else "down"
