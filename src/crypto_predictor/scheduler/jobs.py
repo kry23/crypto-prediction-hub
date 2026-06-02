@@ -149,7 +149,11 @@ def _job_weekly_metrics() -> None:
 
 
 def _job_recalibrate() -> None:
-    log.info("recalibrate job fired (no-op in Plan A)")
+    """Drift check (Phase 1) — Plan D scaffold; auto-refit deferred to v0.3."""
+    log.info("recalibrate_job_start_phase1_scaffold")
+    # Phase 1: drift check via rolling Brier vs baseline.
+    # Auto-refit deferred to v0.3 (high blast radius without staging).
+    log.info("recalibrate_job_done", phase="1_scaffold_only")
 
 
 def build_scheduler() -> BackgroundScheduler:
