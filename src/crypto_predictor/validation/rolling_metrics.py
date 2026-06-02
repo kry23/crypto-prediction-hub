@@ -65,3 +65,26 @@ def update_rolling_metrics(*, predictions_db: Path, now: datetime) -> int:
         return rows_written
     finally:
         conn.close()
+
+
+def load_rolling_metrics_from_db(predictions_db: Path) -> dict[str, dict]:
+    """Load latest rolling-metrics rows for window='ALL'/direction='all' (for report rendering).
+
+    Returns empty dict if DB doesn't exist or metrics_rolling table is empty.
+    """
+    if not predictions_db.exists():
+        return {}
+    conn = sqlite3.connect(str(predictions_db))
+    try:
+        rows = conn.execute(
+            "SELECT window, hit_rate, n_predictions, COALESCE(topk_alpha, 0.0) "
+            "FROM metrics_rolling "
+            "WHERE regime='ALL' AND direction='all' "
+            "ORDER BY window"
+        ).fetchall()
+        return {
+            window: {"hit_rate": hr, "n": n, "alpha": alpha}
+            for window, hr, n, alpha in rows
+        }
+    finally:
+        conn.close()
