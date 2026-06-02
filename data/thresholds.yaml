@@ -1,0 +1,5 @@
+high_conv_p: 0.78
+high_conv_ret: 0.04
+calibration_drift_brier_delta: 0.05
+pattern_seek_min: 0.65
+pattern_avoid_max: 0.50
