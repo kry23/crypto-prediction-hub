@@ -21,7 +21,15 @@ def _matches(row, regime, direction):
     return True
 
 
-def _agg(rows):
+def compute_top_k_alpha(top_k_returns, universe_returns) -> float:
+    """Top-K mean return minus universe mean return."""
+    if not top_k_returns or not universe_returns:
+        return 0.0
+    import statistics
+    return statistics.mean(top_k_returns) - statistics.mean(universe_returns)
+
+
+def _agg(rows, all_rows_for_universe):
     if not rows:
         return None
     n = len(rows)
@@ -29,7 +37,17 @@ def _agg(rows):
     hit_rate = correct / n
     mae_vals = [abs(r[4] - r[2]) for r in rows if r[4] is not None and r[2] is not None]
     mae = sum(mae_vals) / len(mae_vals) if mae_vals else 0.0
-    return n, correct, hit_rate, mae
+
+    # Top-K alpha (top 20% by |target_value|)
+    sorted_by_signal = sorted(
+        rows, key=lambda r: abs(r[2] or 0), reverse=True,
+    )
+    k = max(1, n // 5)
+    top_k_actuals = [r[4] for r in sorted_by_signal[:k] if r[4] is not None]
+    universe_actuals = [r[4] for r in all_rows_for_universe if r[4] is not None]
+    alpha = compute_top_k_alpha(top_k_actuals, universe_actuals) if top_k_actuals else None
+
+    return n, correct, hit_rate, mae, alpha
 
 
 def update_rolling_metrics(*, predictions_db: Path, now: datetime) -> int:
@@ -48,17 +66,17 @@ def update_rolling_metrics(*, predictions_db: Path, now: datetime) -> int:
             for regime in REGIMES:
                 for direction in DIRECTIONS:
                     filt = [r for r in raw if _matches(r, regime, direction)]
-                    agg = _agg(filt)
+                    agg = _agg(filt, raw)
                     if agg is None:
                         continue
-                    n, correct, hit, mae = agg
+                    n, correct, hit, mae, alpha = agg
                     conn.execute(
                         "INSERT OR REPLACE INTO metrics_rolling("
                         "window, regime, direction, n_predictions, n_correct, "
                         "hit_rate, mae, brier, topk_alpha, topk_alpha_btc, updated_at"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)",
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?)",
                         (win_label, regime, direction, n, correct,
-                         hit, mae, now.isoformat()),
+                         hit, mae, alpha, now.isoformat()),
                     )
                     rows_written += 1
         conn.commit()
