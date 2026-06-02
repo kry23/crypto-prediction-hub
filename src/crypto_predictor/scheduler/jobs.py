@@ -16,6 +16,8 @@ from crypto_predictor.orchestrator.universe import (
     assign_mcap_ranks,
     list_active_perps,
 )
+from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
+from crypto_predictor.validation.validator import validate_pending_predictions
 
 log = structlog.get_logger(__name__)
 
@@ -120,11 +122,30 @@ def _job_predict_scan() -> None:
 
 
 def _job_validate_pending() -> None:
-    log.info("validate_pending job fired (no-op in Plan A)")
+    """Close pending predictions whose horizon has elapsed."""
+    project_root = Path(os.environ.get(
+        "CRYPTO_PREDICTOR_ROOT",
+        Path(__file__).resolve().parents[3],
+    ))
+    n = validate_pending_predictions(
+        predictions_db=project_root / "predictions.db",
+        history_root=project_root / "data" / "history",
+        now=datetime.now(timezone.utc),
+    )
+    log.info("validate_pending_done", n_closed=n)
 
 
 def _job_weekly_metrics() -> None:
-    log.info("weekly_metrics job fired (no-op in Plan A)")
+    """Refresh rolling metrics table."""
+    project_root = Path(os.environ.get(
+        "CRYPTO_PREDICTOR_ROOT",
+        Path(__file__).resolve().parents[3],
+    ))
+    n = update_rolling_metrics(
+        predictions_db=project_root / "predictions.db",
+        now=datetime.now(timezone.utc),
+    )
+    log.info("weekly_metrics_done", n_rows=n)
 
 
 def _job_recalibrate() -> None:
