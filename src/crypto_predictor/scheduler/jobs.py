@@ -67,6 +67,52 @@ def _job_predict_scan() -> None:
         formula_version="v1.5",
         llm_client=llm_client,
     )
+
+    # === Output delivery (Task 8.5) ===
+    from crypto_predictor.config import load_secrets
+    from crypto_predictor.output.markdown_report import render_daily_report
+    from crypto_predictor.output.telegram_summary import (
+        render_telegram_summary, render_high_conviction_alert,
+    )
+    from crypto_predictor.output.telegram_delivery import send_message
+    from crypto_predictor.output.thresholds import (
+        load_thresholds, classify_high_conviction,
+    )
+
+    slate = result["slate"]
+    asof = datetime.now(timezone.utc)
+
+    # Markdown report
+    report_md = render_daily_report(
+        asof=asof, regime=result["scan"]["regime"], slate=slate,
+        n_scanned=len(symbols), n_skipped=result["scan"]["n_skipped"],
+        rolling_metrics={},  # populated in Plan D (B-loop metrics)
+    )
+    report_dir = project_root / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_filename = report_dir / f"predict-{asof.strftime('%Y-%m-%d-%H%M')}.md"
+    report_filename.write_text(report_md, encoding="utf-8")
+    log.info("daily_report_written", path=str(report_filename))
+
+    # Telegram delivery
+    secrets = load_secrets(project_root / "data" / "secrets.env")
+    bot_token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = secrets.get("TELEGRAM_CHAT_ID", "")
+    if bot_token and chat_id:
+        summary_msg = render_telegram_summary(
+            asof=asof, regime=result["scan"]["regime"], slate=slate,
+            report_filename=f"reports/{report_filename.name}",
+        )
+        send_message(bot_token=bot_token, chat_id=chat_id, text=summary_msg)
+
+        thresholds = load_thresholds(project_root / "data" / "thresholds.yaml")
+        high_conv = classify_high_conviction(
+            slate.top_long + slate.top_short, thresholds,
+        )
+        if high_conv:
+            alert_msg = render_high_conviction_alert(high_conv[:10])
+            send_message(bot_token=bot_token, chat_id=chat_id, text=alert_msg)
+
     log.info("predict_scan_done",
              n_predictions=result["scan"]["n_predictions"])
 
