@@ -43,6 +43,8 @@ class FeatureFetcher:
         if not path.exists():
             return pd.DataFrame(columns=["timestamp", "funding_rate"])
         df = pd.read_parquet(path)
+        if "timestamp" not in df.columns:
+            return pd.DataFrame(columns=["timestamp", "funding_rate"])
         df = df[df["timestamp"] < self._asof_ms]
         return df.tail(lookback_rows).reset_index(drop=True)
 
@@ -51,6 +53,8 @@ class FeatureFetcher:
         if not path.exists():
             return pd.DataFrame(columns=["timestamp", "open_interest"])
         df = pd.read_parquet(path)
+        if "timestamp" not in df.columns:
+            return pd.DataFrame(columns=["timestamp", "open_interest"])
         df = df[df["timestamp"] < self._asof_ms]
         return df.tail(lookback_rows).reset_index(drop=True)
 
@@ -59,6 +63,8 @@ class FeatureFetcher:
         if not path.exists():
             return pd.DataFrame(columns=["timestamp", "ls_ratio"])
         df = pd.read_parquet(path)
+        if "timestamp" not in df.columns:
+            return pd.DataFrame(columns=["timestamp", "ls_ratio"])
         df = df[df["timestamp"] < self._asof_ms]
         return df.tail(lookback_rows).reset_index(drop=True)
 
@@ -67,5 +73,7 @@ class FeatureFetcher:
         if not path.exists():
             return pd.DataFrame(columns=["timestamp", "side", "size_usdt"])
         df = pd.read_parquet(path)
+        if "timestamp" not in df.columns:
+            return pd.DataFrame(columns=["timestamp", "side", "size_usdt"])
         df = df[df["timestamp"] < self._asof_ms]
         return df.tail(lookback_rows).reset_index(drop=True)
