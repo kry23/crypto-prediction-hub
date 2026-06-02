@@ -15,6 +15,20 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "global": 0.15,
 }
 
+DEFAULT_REGIME_WEIGHTS: dict[str, dict[str, float]] = {
+    "BULL": DEFAULT_WEIGHTS,
+    "BEAR": {"momentum": 0.15, "perp": 0.20, "volume": 0.10,
+             "technical": 0.20, "sentiment": 0.10, "global": 0.25},
+    "CHOP": {"momentum": 0.10, "perp": 0.30, "volume": 0.15,
+             "technical": 0.25, "sentiment": 0.10, "global": 0.10},
+}
+
+
+def compute_direction_raw_for_regime(feats: dict, regime: str) -> float:
+    """Convenience: pick regime-specific weights and compute direction."""
+    weights = DEFAULT_REGIME_WEIGHTS.get(regime, DEFAULT_WEIGHTS)
+    return compute_direction_raw(feats, weights=weights)
+
 
 def compute_direction_raw(feats: dict, *,
                           weights: dict[str, float] | None = None) -> float:

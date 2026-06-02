@@ -17,7 +17,10 @@ from crypto_predictor.calibration.persistence import save_calibration
 from crypto_predictor.features.compute import compute_features
 from crypto_predictor.features.fetcher import FeatureFetcher
 from crypto_predictor.scoring.anomaly import is_anomalous
-from crypto_predictor.scoring.direction import compute_direction_raw
+from crypto_predictor.scoring.direction import (
+    compute_direction_raw,
+    compute_direction_raw_for_regime,
+)
 from crypto_predictor.scoring.magnitude import compute_expected_return
 from crypto_predictor.scoring.regime import detect_regime
 from crypto_predictor.scoring.returns import actual_return
@@ -74,7 +77,7 @@ def run_backtest(*, history_root: Path,
                 log.warning("feature_compute_failed",
                             symbol=sym, asof=asof.isoformat(), error=str(exc))
                 continue
-            raw = compute_direction_raw(feats)
+            raw = compute_direction_raw_for_regime(feats, regime)
             actual = actual_return(root=history_root, symbol=sym,
                                    start_time=asof, horizon_hours=24)
             if actual is None:

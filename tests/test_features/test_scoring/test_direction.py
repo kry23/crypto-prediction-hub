@@ -48,3 +48,16 @@ def test_direction_raw_custom_weights_change_output():
 
 def test_default_weights_sum_to_one():
     assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 1e-9
+
+
+def test_compute_direction_raw_for_regime_uses_regime_weights():
+    from crypto_predictor.scoring.direction import (
+        compute_direction_raw_for_regime, DEFAULT_REGIME_WEIGHTS,
+    )
+    feats = {"ret_24h_z": 2.0, "mom_consistency": 0.9, "mcap_rank_weight": 1.0}
+    # CHOP should use lower momentum weight than BULL
+    raw_bull = compute_direction_raw_for_regime(feats, "BULL")
+    raw_chop = compute_direction_raw_for_regime(feats, "CHOP")
+    # CHOP momentum weight (0.10) < BULL momentum weight (0.20)
+    # -> raw_chop should be less positive than raw_bull for momentum-dominant features
+    assert raw_chop < raw_bull
