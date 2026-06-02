@@ -133,16 +133,33 @@ def run_backtest(*, history_root: Path,
         }
     buckets = calibration_bucket_table(probs, labels)
 
-    sorted_by_signal = sorted(
-        zip(expected_rets, actual_rets), key=lambda x: abs(x[0]), reverse=True
+    # Build triples for ranking: (prob_up, expected_return, actual_return)
+    triples = list(zip(probs, expected_rets, actual_rets))
+    k = max(1, len(triples) // 5)
+
+    # Long ranking: highest (p_up - 0.5) × |expected_return|, restricted to bullish predictions
+    long_sorted = sorted(
+        triples,
+        key=lambda x: (x[0] - 0.5) * abs(x[1]) if x[0] > 0.5 else -float("inf"),
+        reverse=True,
     )
-    k = max(1, len(sorted_by_signal) // 5)
-    top_k_actual_long = [a for _, a in sorted_by_signal[:k]]
-    long_alpha = top_k_alpha(top_k_actual_long, actual_rets)
+    top_long_actual = [a for _, _, a in long_sorted[:k]]
+    long_alpha = top_k_alpha(top_long_actual, actual_rets)
+
+    # Short ranking: highest (0.5 - p_up) × |expected_return|, restricted to bearish predictions
+    short_sorted = sorted(
+        triples,
+        key=lambda x: (0.5 - x[0]) * abs(x[1]) if x[0] < 0.5 else -float("inf"),
+        reverse=True,
+    )
+    top_short_actual = [a for _, _, a in short_sorted[:k]]
+    # Shorts profit when returns are negative — invert sign so positive = "good short"
+    short_alpha = -top_k_alpha(top_short_actual, actual_rets)
+
     top_k_alpha_dict = {
         "long": long_alpha,
-        "short": 0.0,
-        "combined": long_alpha,
+        "short": short_alpha,
+        "combined": long_alpha + short_alpha,
     }
 
     report = render_backtest_report(
