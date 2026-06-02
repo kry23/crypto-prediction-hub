@@ -27,10 +27,23 @@ data/db/
 *.db
 *.db-journal
 
+# Logs (runtime artifacts from ingest/backtest/scheduler)
+*.log
+
+# Build artifacts
+dist/
+build/
+.ipynb_checkpoints/
+
 # Secrets
 .env
+.env.*
 secrets.env
 *.secret
 
 # Reports (gitignored, generated daily)
 reports/
+
+# Operational artifacts
+.smoke_*
+.claude/
