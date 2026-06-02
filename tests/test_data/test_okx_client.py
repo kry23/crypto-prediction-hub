@@ -103,6 +103,83 @@ def test_fetch_oi_history_returns_dataframe():
                           since_ms=1717286400000)
     assert list(df.columns) == ["timestamp", "open_interest"]
     assert len(df) == 2
+    assert df.iloc[0]["open_interest"] == 12345.0
+
+
+def test_fetch_oi_history_prefers_openInterestValue_when_amount_is_null():
+    """OKX populates openInterestValue (USD notional) while leaving
+    openInterestAmount as null for many timeframes — extractor should pick it up."""
+    fake = MagicMock()
+    fake.fetch_open_interest_history.return_value = [
+        {
+            "timestamp": 1717286400000,
+            "openInterestAmount": None,
+            "openInterestValue": 3273961174.86,
+            "info": ["1717286400000", "3273961174.86", "3903028523.98"],
+        },
+        {
+            "timestamp": 1717290000000,
+            "openInterestAmount": None,
+            "openInterestValue": 3277637200.28,
+            "info": ["1717290000000", "3277637200.28", "2233508736.49"],
+        },
+    ]
+    df = fetch_oi_history(fake, "BTC-USDT-SWAP",
+                          since_ms=1717286400000)
+    assert list(df.columns) == ["timestamp", "open_interest"]
+    assert len(df) == 2
+    assert df["open_interest"].isna().sum() == 0
+    assert df.iloc[0]["open_interest"] == pytest.approx(3273961174.86)
+
+
+def test_fetch_oi_history_falls_back_to_info_list():
+    """If both top-level fields are missing, fall back to info[1]."""
+    fake = MagicMock()
+    fake.fetch_open_interest_history.return_value = [
+        {
+            "timestamp": 1717286400000,
+            "openInterestAmount": None,
+            "openInterestValue": None,
+            "info": ["1717286400000", "12345.67", "999.0"],
+        },
+    ]
+    df = fetch_oi_history(fake, "BTC-USDT-SWAP",
+                          since_ms=1717286400000)
+    assert len(df) == 1
+    assert df.iloc[0]["open_interest"] == pytest.approx(12345.67)
+
+
+def test_fetch_oi_history_skips_rows_with_no_usable_value():
+    """Rows where neither top-level fields nor info carry a numeric OI
+    should be silently dropped; the returned DataFrame must have no nulls."""
+    fake = MagicMock()
+    fake.fetch_open_interest_history.return_value = [
+        {"timestamp": 1717286400000, "openInterestAmount": None,
+         "openInterestValue": None, "info": None},
+        {"timestamp": 1717290000000, "openInterestAmount": None,
+         "openInterestValue": 12500.0, "info": []},
+        {"timestamp": 1717293600000, "openInterestAmount": None,
+         "openInterestValue": "not-a-number", "info": ["bad"]},
+    ]
+    df = fetch_oi_history(fake, "BTC-USDT-SWAP",
+                          since_ms=1717286400000)
+    # Only the middle row is salvageable
+    assert len(df) == 1
+    assert df["open_interest"].isna().sum() == 0
+    assert df.iloc[0]["open_interest"] == 12500.0
+
+
+def test_fetch_oi_history_all_null_returns_empty_frame():
+    """When every row is unparsable, return an empty (but shaped) DataFrame."""
+    fake = MagicMock()
+    fake.fetch_open_interest_history.return_value = [
+        {"timestamp": 1717286400000, "openInterestAmount": None,
+         "openInterestValue": None, "info": None},
+    ]
+    df = fetch_oi_history(fake, "BTC-USDT-SWAP",
+                          since_ms=1717286400000)
+    assert df.empty
+    assert list(df.columns) == ["timestamp", "open_interest"]
 
 
 def test_fetch_long_short_ratio_via_public_api(monkeypatch):

@@ -107,17 +107,74 @@ def fetch_funding_history(client, symbol: str, since_ms: int,
     return df.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
 
 
+def _extract_oi_value(row: dict) -> float | None:
+    """Extract OI numeric value from a ccxt fetch_open_interest_history row.
+
+    OKX populates `openInterestValue` (notional in USD) and leaves
+    `openInterestAmount` as null for many timeframes. As a fallback, the
+    raw OKX response in `info` is `[ts, oi_value, volume]`.
+    Returns None when no usable numeric value is found.
+    """
+    for key in ("openInterestValue", "openInterestAmount", "openInterest"):
+        v = row.get(key)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        # Treat NaN as missing
+        if f != f:  # noqa: PLR0124  (NaN check)
+            continue
+        return f
+    info = row.get("info")
+    # OKX raw: list/tuple [ts, oi_value, volume]
+    if isinstance(info, (list, tuple)) and len(info) >= 2:
+        try:
+            f = float(info[1])
+            if f == f:
+                return f
+        except (TypeError, ValueError):
+            pass
+    # Some exchanges return info as dict
+    if isinstance(info, dict):
+        for key in ("oi", "openInterest", "openInterestValue",
+                    "openInterestAmount"):
+            v = info.get(key)
+            if v is None:
+                continue
+            try:
+                f = float(v)
+                if f == f:
+                    return f
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=1, max=30))
 def fetch_oi_history(client, symbol: str, since_ms: int,
                      limit: int = 100) -> pd.DataFrame:
-    """Fetch open interest history for a perp via ccxt."""
+    """Fetch open interest history for a perp via ccxt.
+
+    Rows where no usable OI value can be extracted are skipped, so the
+    returned DataFrame never contains null open_interest values.
+    """
     rows = client.fetch_open_interest_history(symbol, since=since_ms, limit=limit)
     if not rows:
         return pd.DataFrame(columns=["timestamp", "open_interest"])
-    df = pd.DataFrame([
-        {"timestamp": r["timestamp"], "open_interest": r["openInterestAmount"]}
-        for r in rows
-    ])
+    parsed: list[dict] = []
+    for r in rows:
+        ts = r.get("timestamp")
+        if ts is None:
+            continue
+        oi = _extract_oi_value(r)
+        if oi is None:
+            continue
+        parsed.append({"timestamp": int(ts), "open_interest": oi})
+    if not parsed:
+        return pd.DataFrame(columns=["timestamp", "open_interest"])
+    df = pd.DataFrame(parsed)
     return df.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
 
 

@@ -22,8 +22,10 @@ def compute_perp_features(fetcher: FeatureFetcher,
         feats["funding_z"] = 0.0
         feats["funding_extreme"] = 0.0
 
-    # Open interest growth
+    # Open interest growth — drop nulls (legacy parquets may contain them)
     oi_df = fetcher.open_interest(symbol, lookback_rows=800)
+    if not oi_df.empty:
+        oi_df = oi_df.dropna(subset=["open_interest"]).reset_index(drop=True)
     if len(oi_df) >= 25:
         now_oi = float(oi_df["open_interest"].iloc[-1])
         oi_24h_ago = float(oi_df["open_interest"].iloc[-25])
