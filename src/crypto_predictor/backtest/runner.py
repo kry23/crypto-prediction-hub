@@ -52,9 +52,16 @@ def run_backtest(*, history_root: Path,
     raw_samples: list[tuple[float, int, str]] = []
     pred_records: list[dict] = []
 
-    for asof in _sample_times(start, end, sample_interval_hours):
+    sample_list = _sample_times(start, end, sample_interval_hours)
+    total_samples = len(sample_list)
+    for i, asof in enumerate(sample_list, start=1):
         fetcher = FeatureFetcher(root=history_root, asof=asof)
         regime = detect_regime(fetcher)
+        if i == 1 or i % 5 == 0 or i == total_samples:
+            log.info("backtest_progress",
+                     sample=i, total=total_samples,
+                     asof=asof.isoformat(), regime=regime,
+                     predictions_so_far=len(pred_records))
 
         for sym in symbols:
             try:
