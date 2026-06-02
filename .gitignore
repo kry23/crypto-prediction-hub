@@ -29,6 +29,7 @@ data/db/
 
 # Logs (runtime artifacts from ingest/backtest/scheduler)
 *.log
+*.err
 
 # Build artifacts
 dist/
