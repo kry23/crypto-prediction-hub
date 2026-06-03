@@ -686,4 +686,37 @@ The system's biggest insight — that `tilt_momentum` flips sign across regimes 
 
 ---
 
+## 19. Live findings (2026-06-03 post-v0.2)
+
+### 19.1 NewsAPI date format bug — discovered live
+
+**Symptom**: After filling `NEWSAPI_API_KEY` in `data/secrets.env` (copied from intel-hub), live sentiment fetch returned 0 articles for every coin despite a valid 200/ok response.
+
+**Root cause**: Task 12.1's `newsapi_fetcher.py` formatted the `from` parameter as full ISO datetime (`2026-06-02T08:23:00+00:00`). **NewsAPI silently returns 0 results when given that format** — only accepts `YYYY-MM-DD`. Without `from` at all → 5,441 articles. With ISO → 0. With `YYYY-MM-DD` → 45+ (free tier limit).
+
+**Fix** (commit `8ebbc52`): one-line — `.isoformat()` → `.strftime("%Y-%m-%d")`. Unit tests still pass (they mock the http call so the date format was never exercised).
+
+**Verified live**: BTC -0.10 (mild bearish), ETH -0.26 (bearish), SOL -0.40 (more bearish) — matched the actual news flow ("Bitcoin Drop Below $70,000", "Radiant Capital $50M Hack", Mt. Gox repayment risk).
+
+**Lesson**: Mock-based unit tests can't catch real-API format mismatches. Operational verification with a real API key is essential before declaring a fetcher complete. Phase 1.5's "operational verification IS code" rule applies to v0.2 too.
+
+**Secrets state after fix**:
+- `NEWSAPI_API_KEY` filled (32 chars)
+- `TELEGRAM_BOT_TOKEN` filled (bot 8650166824)
+- `TELEGRAM_CHAT_ID` filled (8185185024)
+- `LUNARCRUSH_API_KEY` still empty (Tier-2 not purchased)
+- `ANTHROPIC_API_KEY` still empty (LLM rationale falls back to structured one-liner)
+
+### 19.2 README + CHANGELOG ship (commit `014592b`)
+
+Updated `README.md` to reflect current state (was stuck on "Phase 1 in progress — Week 1 of 10"). Created `CHANGELOG.md` with full version history Plan A → v0.2 polish, including every fix commit SHA. Reasoning: future onboarding (fresh agent or new collaborator) gets the "what does this do + how do I run it + what shipped when" answer in 30 seconds without having to read 5 plan docs.
+
+CHANGELOG follows loose Keep-a-Changelog format. Versioning intent:
+- **v1.0 tag** awaits first live hit rate ≥ Phase 1.5 baseline 62.5% over 7 days
+- **v0.x patches** = bug fixes between minor releases
+- **v0.3** = LightGBM ML upgrade
+- **v0.4+** = vocabulary v2, 4h horizon, sector overlay
+
+---
+
 *End of session journal. 2026-06-03.*
