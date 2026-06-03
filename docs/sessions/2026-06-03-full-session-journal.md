@@ -958,6 +958,25 @@ The system is **anti-calibrated above p = 0.55**. Higher confidence → worse ou
 - v0.3 calibration revision moves from "v0.3 candidate" to "**v0.3 blocker for next live deploy**". The LightGBM ML upgrade can wait; the calibration fix cannot.
 - The §19.9 housekeeping batch ships an `eth_dom_trend_7d` that *will* populate over 7 days. Should be re-evaluated after that fill window: do the cross-coin tilts actually pick up signal when fed real values?
 
+### 19.11 Equity-perp blacklist (commit `65a0018`)
+
+First track A from the post-first-live triage. The SPCX +26.5% magnitude failure was a clean signal: tokenized US equity perps on OKX have insufficient history for the realized-vol-based magnitude estimator. Shipping a configurable exact-match blacklist:
+
+- `data/equity_blacklist.yaml` — initial population SPCX, RKLB, CRWD, XLE (the four wild cards from yesterday's snapshot that map to US equity tickers).
+- `load_blacklist(path) -> set[str]` reads YAML; non-string entries trigger a warning and are skipped.
+- `list_active_perps(client, blacklist_path=None)` — backwards-compatible signature; without the kwarg behavior is unchanged. With the kwarg, filters by `ccxt_to_base_ccy()` match against the loaded set. Emits `blacklist_applied(excluded_count, sample=[first 5])` at INFO when at least one symbol is dropped.
+- Wired into `_job_predict_scan` and `_job_incremental_ingest` (both call sites pass `project_root / "data" / "equity_blacklist.yaml"`), plus the standalone `scripts/incremental_ingest.py` CLI (new `--blacklist-path` arg defaulting to the same path).
+
+The historical parquet files in `data/history/` are intentionally untouched. Retrospective analysis of SPCX/RKLB/CRWD/XLE remains possible; only the *forward* prediction + ingest cycle filters them.
+
+**What this fixes**: future cohorts will not include the four worst magnitude offenders. The next live hit rate should improve modestly — these names contributed disproportionately to the wild-card miss rate and pulled the magnitude scale.
+
+**What this does NOT fix**: the core calibration miss (32.8% vs 62.5%) is a model issue, not a universe-curation issue. Track B (v0.3 calibration revision) is still required.
+
+**Open question deferred**: pattern-matching (e.g., "any 3-4 letter ALL CAPS ticker") vs explicit list. Started with explicit list because YAGNI; if more equity tickers surface in future cohorts, adding them to the list takes one PR. Pattern-matching can come later if the manual maintenance burden grows.
+
+8 new tests. Suite 233 → 241 green. Track A complete.
+
 ---
 
 *End of session journal. 2026-06-03.*
