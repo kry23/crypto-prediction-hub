@@ -81,12 +81,21 @@ def summarize_recent_closures(*, db_path: Path, since: datetime
 def format_validation_telegram(summary: dict, *,
                                   backtest_brier_baseline: float = 0.226,
                                   backtest_hit_baseline: float = 0.625,
+                                  mode: str = "live",
                                   ) -> str:
-    """Render a compact Telegram digest from summarize_recent_closures()."""
+    """Render a compact Telegram digest from summarize_recent_closures().
+
+    Set ``mode="shadow"`` to surface a Shadow-validation header instead of the
+    default live-cycle header. Used to visually distinguish shadow-run digests
+    so a 30%-ish shadow hit rate isn't mistaken for live-model regression.
+    """
     if summary.get("n_closed", 0) == 0:
         return ""
 
-    lines = ["📊 *Validation cycle complete*"]
+    if mode == "shadow":
+        lines = ["🔬 *Shadow validation*"]
+    else:
+        lines = ["📊 *Validation cycle complete*"]
     n = summary["n_closed"]
     hr = summary["hit_rate"]
     br = summary["brier"]
@@ -122,6 +131,14 @@ def format_validation_telegram(summary: dict, *,
             d = summary["by_direction"][direction]
             lines.append(
                 f"  {direction}: {d['correct']}/{d['n']} "
+                f"({d['hit_rate'] * 100:.0f}%)"
+            )
+    if summary.get("by_completeness"):
+        lines.append("\nBy completeness:")
+        for bucket in sorted(summary["by_completeness"]):
+            d = summary["by_completeness"][bucket]
+            lines.append(
+                f"  {bucket}: {d['correct']}/{d['n']} "
                 f"({d['hit_rate'] * 100:.0f}%)"
             )
 

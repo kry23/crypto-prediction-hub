@@ -168,3 +168,36 @@ def test_lookback_window_returns_correct_delta():
     now = datetime(2026, 6, 3, 11, 30, tzinfo=timezone.utc)
     since = lookback_window(now, hours=24)
     assert since == datetime(2026, 6, 2, 11, 30, tzinfo=timezone.utc)
+
+
+def test_format_validation_telegram_shadow_variant():
+    summary = {
+        "n_closed": 100, "n_correct": 38, "hit_rate": 0.38, "brier": 0.31,
+        "by_flag": {"NORMAL": {"n": 90, "correct": 35, "hit_rate": 0.389},
+                    "WILD_CARD": {"n": 10, "correct": 3, "hit_rate": 0.3}},
+        "by_regime": {"CHOP": {"n": 100, "correct": 38, "hit_rate": 0.38}},
+        "by_direction": {"up": {"n": 60, "correct": 20, "hit_rate": 0.333},
+                          "down": {"n": 40, "correct": 18, "hit_rate": 0.45}},
+    }
+    msg = format_validation_telegram(summary, mode="shadow")
+    assert "Shadow validation" in msg or "🔬" in msg
+    assert "Validation cycle complete" not in msg
+
+
+def test_format_validation_telegram_live_variant_unchanged():
+    summary = {
+        "n_closed": 100, "n_correct": 63, "hit_rate": 0.63, "brier": 0.22,
+        "by_flag": {}, "by_regime": {}, "by_direction": {},
+    }
+    msg = format_validation_telegram(summary, mode="live")
+    assert "Validation cycle complete" in msg or "📊" in msg
+
+
+def test_format_validation_telegram_defaults_to_live():
+    """Backwards compat: no mode kwarg = live variant."""
+    summary = {
+        "n_closed": 50, "n_correct": 30, "hit_rate": 0.6, "brier": 0.20,
+        "by_flag": {}, "by_regime": {}, "by_direction": {},
+    }
+    msg = format_validation_telegram(summary)
+    assert "Validation cycle complete" in msg or "📊" in msg
