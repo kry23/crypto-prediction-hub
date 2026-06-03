@@ -77,7 +77,8 @@ def _job_predict_scan() -> None:
     )
     from crypto_predictor.sentiment.cache_writer import write_sentiment_for_symbol
     from crypto_predictor.global_ctx.fetcher import (
-        fetch_btc_dom_trend, write_global_for_asof,
+        compute_trend_pct, fetch_dominance_snapshot,
+        read_sector_history, write_global_for_asof,
     )
     import httpx as _httpx
 
@@ -109,17 +110,25 @@ def _job_predict_scan() -> None:
                             symbol=sym, error=str(exc))
         http.close()
 
-    # Global context (BTC dom)
+    # Global context (BTC + ETH dom; 7d trends from cached history)
     try:
         gh = _httpx.Client(timeout=20.0)
-        btc_dom = fetch_btc_dom_trend(http_client=gh)
+        dom = fetch_dominance_snapshot(http_client=gh)
         gh.close()
+        btc_dom = dom["btc"]
+        eth_dom = dom["eth"]
+        btc_dom_trend_7d = compute_trend_pct(
+            read_sector_history(global_cache, "sector_btc", lookback_days=7)
+        )
+        eth_dom_trend_7d = compute_trend_pct(
+            read_sector_history(global_cache, "sector_eth", lookback_days=7)
+        )
         write_global_for_asof(
             db=global_cache, timestamp=asof_iso,
-            btc_dom_trend_7d=0.0,  # naive snapshot; 7d trend TBD in later iteration
-            eth_btc_trend_7d=0.0,
+            btc_dom_trend_7d=btc_dom_trend_7d,
+            eth_btc_trend_7d=eth_dom_trend_7d,
             total_mcap_z=0.0,
-            sector_btc=btc_dom, sector_eth=0.0,
+            sector_btc=btc_dom, sector_eth=eth_dom,
             sector_defi=0.0, sector_l1=0.0,
         )
     except Exception as exc:
