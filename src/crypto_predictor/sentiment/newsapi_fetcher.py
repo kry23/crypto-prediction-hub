@@ -17,7 +17,8 @@ def fetch_articles_for_coin(*, http_client, api_key: str, coin: str,
     if not api_key:
         return []
     from datetime import datetime, timedelta, timezone
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).isoformat()
+    # NewsAPI accepts YYYY-MM-DD; full ISO datetime returns 0 results
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime("%Y-%m-%d")
     params = {
         "q": coin,
         "from": since,
