@@ -815,6 +815,43 @@ So the **natural validator closure is 2026-06-04 06:30 UTC, not 2026-06-03 11:30
 
 This will be wired into the auto-analysis hook in 19.7 so the same observability runs automatically post-`_job_validate_pending` at 06:30 UTC daily — picking up any cohort that the manual run missed.
 
+### 19.7 Post-validation Telegram digest
+
+Built `src/crypto_predictor/output/post_validation.py` with `summarize_recent_closures()` + `format_validation_telegram()`. After any non-empty validator closure (scheduler or manual CLI), the system now sends a compact digest:
+
+```
+📊 Validation cycle complete
+Closed: 353   Hit: 62.7% ▲0.2pp
+Brier: 0.224 ▼0.002 vs 0.226
+
+By flag:
+  HIGH_CONV: 1/1 (100%)
+  NORMAL: 220/330 (67%)
+  WILD_CARD: 14/22 (64%)
+
+By regime:
+  CHOP: 235/353 (67%)
+
+By direction:
+  down: 60/100 (60%)
+  up: 175/253 (69%)
+```
+
+(Numbers above are illustrative.) The digest answers three questions in one Telegram message:
+1. **Did the live cohort match the backtest baseline?** Hit rate delta vs 62.5%, Brier delta vs 0.226.
+2. **Where's the alpha or the leak?** Per-flag and per-direction breakdown surfaces wild-card success rate and long/short asymmetry immediately.
+3. **Is the regime model stable?** Per-regime hit rate exposes whether one regime is dragging the average.
+
+Wired into both `_job_validate_pending` (06:30 UTC cron) and `scripts/validate_pending_cli.py` (manual trigger). Both call `summarize_recent_closures(since=now-24h)` so the digest covers only the cohort that just closed, not historical noise. Skips silently when no closures or no Telegram credentials. Manual CLI also has `--no-telegram` for quiet runs.
+
+8 new unit tests for the summary/format logic + 2 new scheduler tests for the wiring. Total: 200 → 210 tests, all green.
+
+**Composition with 19.6**: the recommended sequence for the 11:30 UTC cohort is now reduced to a single command:
+```
+python scripts/validate_pending_cli.py
+```
+Closes the 353, computes the digest, sends Telegram. The standalone `wildcard_analysis.py` and `calibration_ceiling_analysis.py` remain available for deep-dive analysis but are no longer required for the first-look summary.
+
 ---
 
 *End of session journal. 2026-06-03.*

@@ -19,6 +19,11 @@ from crypto_predictor.orchestrator.universe import (
     assign_mcap_ranks,
     list_active_perps,
 )
+from crypto_predictor.output.post_validation import (
+    format_validation_telegram,
+    lookback_window,
+    summarize_recent_closures,
+)
 from crypto_predictor.output.telegram_delivery import send_message
 from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
 from crypto_predictor.validation.validator import validate_pending_predictions
@@ -186,17 +191,39 @@ def _job_predict_scan() -> None:
 
 
 def _job_validate_pending() -> None:
-    """Close pending predictions whose horizon has elapsed."""
+    """Close pending predictions whose horizon has elapsed. Telegrams on close."""
     project_root = Path(os.environ.get(
         "CRYPTO_PREDICTOR_ROOT",
         Path(__file__).resolve().parents[3],
     ))
+    now = datetime.now(timezone.utc)
     n = validate_pending_predictions(
         predictions_db=project_root / "predictions.db",
         history_root=project_root / "data" / "history",
-        now=datetime.now(timezone.utc),
+        now=now,
     )
     log.info("validate_pending_done", n_closed=n)
+    if n == 0:
+        return
+
+    summary = summarize_recent_closures(
+        db_path=project_root / "predictions.db",
+        since=lookback_window(now, hours=24),
+    )
+    if summary.get("n_closed", 0) == 0:
+        return
+    log.info("post_validation_summary",
+             n=summary["n_closed"], hit_rate=summary.get("hit_rate"),
+             brier=summary.get("brier"))
+
+    secrets = load_secrets(project_root / "data" / "secrets.env")
+    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    if not (token and chat):
+        return
+    msg = format_validation_telegram(summary)
+    if msg:
+        send_message(bot_token=token, chat_id=chat, text=msg)
 
 
 def _job_weekly_metrics() -> None:

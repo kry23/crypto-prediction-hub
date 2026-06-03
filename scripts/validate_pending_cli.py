@@ -16,7 +16,14 @@ from pathlib import Path
 
 import structlog
 
+from crypto_predictor.config import load_secrets
 from crypto_predictor.logging_config import configure_logging
+from crypto_predictor.output.post_validation import (
+    format_validation_telegram,
+    lookback_window,
+    summarize_recent_closures,
+)
+from crypto_predictor.output.telegram_delivery import send_message
 from crypto_predictor.validation.validator import validate_pending_predictions
 
 log = structlog.get_logger(__name__)
@@ -33,6 +40,8 @@ def main() -> int:
                         default=project_root / "predictions.db")
     parser.add_argument("--history-root", type=Path,
                         default=project_root / "data" / "history")
+    parser.add_argument("--no-telegram", action="store_true",
+                        help="Skip Telegram summary even if secrets are set.")
     args = parser.parse_args()
 
     if not args.db.exists():
@@ -47,6 +56,24 @@ def main() -> int:
         now=now,
     )
     log.info("validate_pending_done", closed=n)
+    if n == 0 or args.no_telegram:
+        return 0
+
+    summary = summarize_recent_closures(
+        db_path=args.db, since=lookback_window(now, hours=24),
+    )
+    log.info("post_validation_summary",
+             n=summary.get("n_closed", 0),
+             hit_rate=summary.get("hit_rate"),
+             brier=summary.get("brier"))
+    secrets = load_secrets(project_root / "data" / "secrets.env")
+    token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    if token and chat:
+        msg = format_validation_telegram(summary)
+        if msg:
+            send_message(bot_token=token, chat_id=chat, text=msg)
+            log.info("post_validation_telegram_sent")
     return 0
 
 
