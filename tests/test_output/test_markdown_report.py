@@ -100,3 +100,21 @@ def test_render_daily_report_works_without_regime_ceilings():
     assert "BTC/USDT:USDT" in md
     assert "0.65" in md
     assert "ceiling" not in md.lower()
+
+
+def test_composite_score_rendered_as_basis_points():
+    # composite_score=0.00027 -> 0.00027 * 10000 = 2.7bp
+    slate = RankedSlate(
+        top_long=[{"symbol": "BTC/USDT:USDT", "p_direction": 0.60,
+                   "target_value": 0.0045, "composite_score": 0.00027,
+                   "rationale": "Edge case low composite."}],
+        top_short=[], wild_cards=[],
+    )
+    md = render_daily_report(
+        asof=datetime(2026, 6, 3, 6, 0, tzinfo=timezone.utc),
+        regime="BULL", slate=slate, n_scanned=1, n_skipped=0,
+        rolling_metrics={},
+    )
+    assert "Composite (bp)" in md
+    assert "2.7bp" in md
+    assert "0.000" not in md  # old raw decimal format must be gone

@@ -22,7 +22,7 @@ def _row(idx: int, p: dict, ceiling: float | None = None) -> str:
         f"| {idx} | {p['symbol']} | "
         f"{_format_p(p['p_direction'], at_ceiling)} | "
         f"{p['target_value']:+.2%} | "
-        f"{p['composite_score']:.3f} | "
+        f"{p['composite_score'] * 10000:.1f}bp | "
         f"{p.get('rationale', '')[:120]} |"
     )
 
@@ -58,7 +58,7 @@ def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
         "",
         "## 📈 Top Long Candidates",
         "",
-        "| # | Coin | P↑ | Exp.Ret | Composite | Rationale |",
+        "| # | Coin | P↑ | Exp.Ret | Composite (bp) | Rationale |",
         "|---|---|---|---|---|---|",
     ]
     for i, p in enumerate(slate.top_long, start=1):
@@ -72,7 +72,7 @@ def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
     lines += [
         "## 📉 Top Short Candidates",
         "",
-        "| # | Coin | P↓ | Exp.Ret | Composite | Rationale |",
+        "| # | Coin | P↓ | Exp.Ret | Composite (bp) | Rationale |",
         "|---|---|---|---|---|---|",
     ]
     for i, p in enumerate(slate.top_short, start=1):
