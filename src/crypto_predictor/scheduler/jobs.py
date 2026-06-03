@@ -22,6 +22,7 @@ from crypto_predictor.orchestrator.universe import (
 from crypto_predictor.output.telegram_delivery import send_message
 from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
 from crypto_predictor.validation.validator import validate_pending_predictions
+from scripts.backup_databases import DEFAULT_BACKUP_DIR, DEFAULT_KEEP, backup_all
 from scripts.incremental_ingest import (
     incremental_symbol_futures,
     incremental_symbol_timeframe,
@@ -289,6 +290,19 @@ def _job_incremental_ingest() -> None:
     log.info("incremental_ingest_done", total_new_bars=total)
 
 
+def _job_backup_databases() -> None:
+    """Snapshot predictions.db + caches to ~/.crypto-predictor-backups (06:45 UTC)."""
+    project_root = Path(os.environ.get(
+        "CRYPTO_PREDICTOR_ROOT",
+        Path(__file__).resolve().parents[3],
+    ))
+    log.info("backup_job_start")
+    results = backup_all(source_root=project_root,
+                          backup_dir=DEFAULT_BACKUP_DIR, keep=DEFAULT_KEEP)
+    log.info("backup_job_done",
+             dbs=sum(1 for v in results.values() if v is not None))
+
+
 def build_scheduler() -> BackgroundScheduler:
     """Build scheduler with all four Phase-1 jobs registered (no-ops until later plans)."""
     sched = BackgroundScheduler(timezone="UTC")
@@ -299,6 +313,9 @@ def build_scheduler() -> BackgroundScheduler:
                   replace_existing=True)
     sched.add_job(_job_validate_pending,
                   CronTrigger(hour=6, minute=30), id="validate_pending", replace_existing=True)
+    sched.add_job(_job_backup_databases,
+                  CronTrigger(hour=6, minute=45), id="backup_databases",
+                  replace_existing=True)
     sched.add_job(_job_weekly_metrics,
                   CronTrigger(day_of_week="sun", hour=7, minute=0), id="weekly_metrics",
                   replace_existing=True)

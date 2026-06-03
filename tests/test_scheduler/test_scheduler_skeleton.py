@@ -9,6 +9,19 @@ def test_scheduler_has_four_jobs():
     assert "weekly_metrics" in names
     assert "recalibrate" in names
     assert "incremental_ingest" in names
+    assert "backup_databases" in names
+    sched.shutdown(wait=False)
+
+
+def test_backup_databases_job_at_0645_utc():
+    from apscheduler.triggers.cron import CronTrigger
+    sched = build_scheduler()
+    by_name = {job.id: job for job in sched.get_jobs()}
+    trig = by_name["backup_databases"].trigger
+    assert isinstance(trig, CronTrigger)
+    fields = {f.name: str(f) for f in trig.fields}
+    assert fields["hour"] == "6"
+    assert fields["minute"] == "45"
     sched.shutdown(wait=False)
 
 
