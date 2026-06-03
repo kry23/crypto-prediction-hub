@@ -23,12 +23,17 @@ CREATE TABLE IF NOT EXISTS predictions (
     error_margin        REAL,
     evaluation          TEXT,
     created_at          TEXT NOT NULL,
-    validated_at        TEXT
+    validated_at        TEXT,
+    mode                 TEXT NOT NULL DEFAULT 'live',
+    feature_completeness TEXT NOT NULL DEFAULT 'full',
+    missing_features     TEXT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pred_symbol  ON predictions(symbol);
 CREATE INDEX IF NOT EXISTS idx_pred_status  ON predictions(status);
 CREATE INDEX IF NOT EXISTS idx_pred_created ON predictions(created_at);
 CREATE INDEX IF NOT EXISTS idx_pred_regime  ON predictions(regime);
+CREATE INDEX IF NOT EXISTS idx_predictions_mode ON predictions(mode);
+CREATE INDEX IF NOT EXISTS idx_predictions_completeness ON predictions(feature_completeness);
 
 CREATE TABLE IF NOT EXISTS predictions_features (
     prediction_id TEXT NOT NULL,
