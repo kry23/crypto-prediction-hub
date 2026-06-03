@@ -96,13 +96,15 @@ def main() -> int:
     parser.add_argument("--fallback-days", type=int, default=30)
     parser.add_argument("--skip-futures", action="store_true")
     parser.add_argument("--limit-symbols", type=int, default=None)
+    parser.add_argument("--blacklist-path", type=Path,
+                        default=Path("data/equity_blacklist.yaml"))
     args = parser.parse_args()
 
     args.root.mkdir(parents=True, exist_ok=True)
     okx = ccxt.okx({"enableRateLimit": True})
     http = httpx.Client(timeout=30.0)
 
-    symbols = list_active_perps(okx)
+    symbols = list_active_perps(okx, blacklist_path=args.blacklist_path)
     if args.limit_symbols:
         symbols = symbols[:args.limit_symbols]
     log.info("incremental_start", n_symbols=len(symbols))

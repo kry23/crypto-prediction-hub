@@ -52,7 +52,9 @@ def _job_predict_scan() -> None:
     calibration_path = project_root / "data" / "calibration_1_5_4.json"
 
     okx = ccxt.okx({"enableRateLimit": True})
-    symbols = list_active_perps(okx)
+    symbols = list_active_perps(
+        okx, blacklist_path=project_root / "data" / "equity_blacklist.yaml",
+    )
 
     mcap_ranks_path = project_root / "data" / "mcap_ranks.yaml"
     if mcap_ranks_path.exists():
@@ -310,7 +312,9 @@ def _job_incremental_ingest() -> None:
     root.mkdir(parents=True, exist_ok=True)
     okx = ccxt.okx({"enableRateLimit": True})
     http = httpx.Client(timeout=30.0)
-    symbols = list_active_perps(okx)
+    symbols = list_active_perps(
+        okx, blacklist_path=project_root / "data" / "equity_blacklist.yaml",
+    )
     log.info("incremental_ingest_start", n_symbols=len(symbols))
     total = 0
     for sym in symbols:

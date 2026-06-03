@@ -1,0 +1,9 @@
+# Base currencies to exclude from the prediction universe.
+# Pattern: one base currency (e.g., SPCX) per line under blacklist:.
+# Currently filtered: tokenized US equity perps with thin history that
+# broke the magnitude estimator in the first live cohort (2026-06-03).
+blacklist:
+  - SPCX     # SpaceX private-market tracker
+  - RKLB     # Rocket Lab
+  - CRWD     # CrowdStrike
+  - XLE      # Energy Select Sector SPDR ETF

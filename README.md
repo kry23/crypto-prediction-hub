@@ -29,10 +29,11 @@ Then 24h later, the validator closes pending predictions against realized return
 ## Architecture
 
 ```
-data/history/        — Parquet OHLCV + futures, 6 months × 340 perps
-predictions.db       — SQLite: predictions, predictions_features, metrics_rolling, patterns
-sentiment_cache.db   — SQLite: daily news sentiment per symbol
-global_cache.db      — SQLite: BTC dom + total mcap + sector indices
+data/history/             — Parquet OHLCV + futures, 6 months × 340 perps
+data/equity_blacklist.yaml — Base currencies excluded from the universe (tokenized equity perps)
+predictions.db            — SQLite: predictions, predictions_features, metrics_rolling, patterns
+sentiment_cache.db        — SQLite: daily news sentiment per symbol
+global_cache.db           — SQLite: BTC dom + total mcap + sector indices
 
 src/crypto_predictor/
 ├── data/          — OKX ccxt client + parquet store
