@@ -1,0 +1,10 @@
+# Copy to data/scheduler_config.yaml and edit. Restart scheduler to apply.
+# git diff of this file = audit trail of mode/calibration version flips.
+
+mode: shadow                       # shadow | live
+calibration_version: "1_5_4"       # which data/calibration_{version}.json to use (quote: YAML parses 1_5_4 as int 154)
+tilt_weights_version: "phase_1_5"  # which data/tilt_weights_{version}.yaml
+
+# Optional overrides:
+# telegram_chat_id_override: null
+# shadow_skip_telegram: false
