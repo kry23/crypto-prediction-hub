@@ -9,7 +9,7 @@ class MissingSecretError(KeyError):
 
 
 def load_secrets(path: Path) -> dict[str, str]:
-    """Load KEY=VALUE pairs from a dotenv-style file. Missing file → empty dict."""
+    """Load KEY=VALUE pairs from a dotenv-style file. Missing file -> empty dict."""
     if not path.exists():
         return {}
     result: dict[str, str] = {}
