@@ -745,6 +745,29 @@ Smoke-tested live: 196 KB predictions.db + 20 KB global_cache.db snapshotted in 
 
 **Why outside the repo?** `~/.crypto-predictor-backups/` rather than `./backups/` keeps the working directory clean, dodges any future gitignore mishap, and survives `git clean -fdx`.
 
+### 19.4 Wild-card profile analysis (pre-validation)
+
+Built `scripts/wildcard_analysis.py` and ran it against the live predictions.db ahead of the 11:30 UTC maturity. Full report: `docs/analyses/2026-06-03-wildcard-profile.md`.
+
+**Population shape**: 22 wild cards out of 355 total (6.2%), matching design intent of a "minority bucket of strong-but-anomalous signals". All 22 are CHOP regime (artifact of the snapshot's universe-wide CHOP labeling), 15 long / 7 short (consistent with the CHOP momentum-flip's upside skew), all still pending.
+
+**The interesting finding — wild cards are high-variance, not low-confidence**:
+
+| flag | n | avg p | avg \|er\| | avg comp |
+|---|---|---|---|---|
+| NORMAL | 332 | 0.6499 | 0.0222 | 0.0144 |
+| WILD_CARD | 22 | **0.6631** | **0.0364** | 0.0161 |
+
+`p_direction` is statistically identical to NORMAL (0.6631 vs 0.6499, within noise). But the expected magnitude is **64% larger** (0.0364 vs 0.0222). This is the magnitude estimator (realized vol × strength × regime mult × sign) responding to anomaly-tail strength values. The calibrated probability isn't elevated because the calibration was fit on the non-anomalous distribution — so the model says "I'm not more confident than usual, I just think the move is bigger".
+
+**Top wild card**: SPCX/USDT:USDT — p=0.575, expected return +26.57%, composite 0.1070. The 26.57% magnitude is implausibly large for 24h and almost certainly reflects an OHLCV outlier or thin-history symbol skewing the realized-vol scale. Watch this when it closes.
+
+**Latent equity-perp surface**: SPCX, RKLB, CRWD, XLE all look like tokenized US equity tickers (SpaceX, Rocket Lab, CrowdStrike, Energy ETF). OKX appears to be running equity-perp markets on USDT settlement. They have thinner liquidity and shorter history than crypto perps — flagging them as wild cards is the correct triage and validates the anomaly flag's behavior.
+
+**Hit rate**: not measurable yet — 0 wild cards closed. The 2 NORMAL expired predictions both returned `evaluation=None` (no T+24h bar found by the validator — likely the incremental ingest hadn't backfilled their symbols at validation time). Re-run after 11:30 UTC.
+
+**Hypothesis for next cycle**: if WILD_CARD hit rate is ≥ NORMAL, the bucket earns its slot. If it's ≥10pp below NORMAL, the anomaly flag is degrading calibration credibility and the bucket should either get its own calibration map (v0.3 candidate) or stop being surfaced.
+
 ---
 
 *End of session journal. 2026-06-03.*
