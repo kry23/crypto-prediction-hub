@@ -768,6 +768,29 @@ Built `scripts/wildcard_analysis.py` and ran it against the live predictions.db 
 
 **Hypothesis for next cycle**: if WILD_CARD hit rate is ≥ NORMAL, the bucket earns its slot. If it's ≥10pp below NORMAL, the anomaly flag is degrading calibration credibility and the bucket should either get its own calibration map (v0.3 candidate) or stop being surfaced.
 
+### 19.5 Calibration ceiling analysis — CHOP saturates at p=0.9198
+
+Built `scripts/calibration_ceiling_analysis.py` and dumped a per-regime knot histogram + ceiling-hit list. Full report: `docs/analyses/2026-06-03-calibration-ceiling.md`.
+
+**The finding**: CHOP's isotonic calibration map tops out at **p=0.9198, not 1.0**. Any `direction_raw ≥ +0.3035` gets clipped there. BULL reaches 1.0 (no ceiling problem). The 5 coins user flagged (BERA, CELO, ATOM, SAND, DOOD) are confirmed all sitting at exactly 0.9198 in the current snapshot — they're indistinguishable in the probability dimension and the ranker tie-breaks them by |expected return| alone.
+
+**Why it happens**: the CHOP y-histogram shows two empty bins (`[0.78, 0.83)`, `[0.83, 0.87)`) immediately below the ceiling — there is no graduated rise toward 0.92, just a jump from a 0.74–0.78 plateau straight to the cap. Isotonic regression cannot extend past the highest empirical observation, and the 60-day fit window's upper tail wasn't deep enough to produce a higher knot. Once two training points landed at 0.9198, every subsequent prediction with `direction_raw ≥ 0.3035` collapses there.
+
+**Does it hurt today?** Not in top-K ranking — composite = p × |er| still orders the tied coins by magnitude. But it does:
+- Make the Brier score on the upper decile look artificially good (we never get to be wrong by claiming p > 0.92)
+- Mask the "extreme conviction" tier in the daily report (user reads 5 coins all at "92%" and can't tell which is most confident)
+- Throw away calibration information at the top of the slate forever
+
+**Why defer to v0.3 rather than fix now**:
+- Behavior is conservative (under-confident on the tail is safer than over-confident)
+- Ranking still works
+- Real fix is structural: extend fit window (6 months of live data after v0.2 will help automatically), or swap isotonic for Platt scaling (parametric tail), or hybrid isotonic + linear extrapolation, or beta-binomial smoothing
+- v0.3's LightGBM upgrade already wants to revisit calibration
+
+**Watch list for 11:30 UTC validation**: when the 5 ceiling-hit predictions close, the realized hit rate of the 0.9198 bucket is the directly observable empirical ceiling. 5/5 or 4/5 → under-confident, no fix urgency. 3/5 → about right. ≤2/5 → materially over-confident, fast-track calibration revision.
+
+**Operational TODO** (cheap, low-risk): add a `*` badge in the markdown report whenever a coin is at the calibration ceiling, with a footnote explaining "calibration ceiling reached; ranking by |er|". Prevents user confusion. Not gating ship; can land any time.
+
 ---
 
 *End of session journal. 2026-06-03.*
