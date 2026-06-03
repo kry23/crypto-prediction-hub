@@ -33,6 +33,44 @@ def _classify_flag(p_direction: float, expected_return: float, anomalous: bool,
     return "NORMAL"
 
 
+def persist_predictions(*, predictions_db: Path,
+                        predictions: list[dict]) -> None:
+    """Persist a batch of prediction dicts into predictions.db.
+
+    Each dict must contain the base prediction columns (id, symbol,
+    horizon_hours, prediction, p_direction, target_value, composite_score,
+    confidence_flag, regime, formula_version, calibration_version, status,
+    created_at). The v0.2.1 mode/feature_completeness/missing_features keys
+    are optional; missing keys default to 'live', 'full', None respectively
+    so existing callers that don't yet thread shadow metadata keep working.
+    """
+    conn = sqlite3.connect(str(predictions_db))
+    try:
+        for pred in predictions:
+            conn.execute(
+                "INSERT INTO predictions ("
+                "id, symbol, horizon_hours, prediction, p_direction, "
+                "target_value, composite_score, confidence_flag, regime, "
+                "formula_version, calibration_version, status, created_at, "
+                "mode, feature_completeness, missing_features"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    pred["id"], pred["symbol"], pred["horizon_hours"],
+                    pred["prediction"], pred["p_direction"],
+                    pred["target_value"], pred["composite_score"],
+                    pred["confidence_flag"], pred["regime"],
+                    pred["formula_version"], pred["calibration_version"],
+                    pred["status"], pred["created_at"],
+                    pred.get("mode", "live"),
+                    pred.get("feature_completeness", "full"),
+                    pred.get("missing_features"),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_daily_scan(*, history_root: Path,
                    sentiment_cache: Path, global_cache: Path,
                    sector_map: Path,
