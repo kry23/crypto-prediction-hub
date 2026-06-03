@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from crypto_predictor.calibration.drift import DriftStatus, detect_drift
 from crypto_predictor.config import load_secrets
+from crypto_predictor.config.scheduler_config import load_scheduler_config
 from crypto_predictor.orchestrator.run import run_full_scan
 from crypto_predictor.orchestrator.universe import (
     assign_mcap_ranks,
@@ -25,6 +26,7 @@ from crypto_predictor.output.post_validation import (
     summarize_recent_closures,
 )
 from crypto_predictor.output.telegram_delivery import send_message
+from crypto_predictor.output.telegram_summary import render_scan_start_heartbeat
 from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
 from crypto_predictor.validation.validator import validate_pending_predictions
 from scripts.backup_databases import DEFAULT_BACKUP_DIR, DEFAULT_KEEP, backup_all
@@ -44,17 +46,47 @@ def _job_predict_scan() -> None:
         "CRYPTO_PREDICTOR_ROOT",
         Path(__file__).resolve().parents[3],
     ))
+    config = load_scheduler_config(
+        project_root / "data" / "scheduler_config.yaml"
+    )
+    log.info("scheduler_mode_loaded", mode=config.mode,
+             calibration_version=config.calibration_version)
+    telegram_disabled = (config.mode == "shadow"
+                         and config.shadow_skip_telegram)
+
     history_root = project_root / "data" / "history"
     predictions_db = project_root / "predictions.db"
     sector_map = project_root / "data" / "sector_map.yaml"
     sentiment_cache = project_root / "data" / "sentiment_cache.db"
     global_cache = project_root / "data" / "global_cache.db"
-    calibration_path = project_root / "data" / "calibration_1_5_4.json"
+    calibration_path = (project_root / "data"
+                        / f"calibration_{config.calibration_version}.json")
 
     okx = ccxt.okx({"enableRateLimit": True})
     symbols = list_active_perps(
         okx, blacklist_path=project_root / "data" / "equity_blacklist.yaml",
     )
+
+    # Scan-start heartbeat — regime is determined inside the scan, so use
+    # a "detecting" placeholder. Skipped entirely if shadow_skip_telegram.
+    if not telegram_disabled:
+        secrets_pre = load_secrets(project_root / "data" / "secrets.env")
+        hb_token = secrets_pre.get("TELEGRAM_BOT_TOKEN", "")
+        hb_chat = (config.telegram_chat_id_override
+                   or secrets_pre.get("TELEGRAM_CHAT_ID", ""))
+        if hb_token and hb_chat:
+            heartbeat = render_scan_start_heartbeat(
+                asof=datetime.now(timezone.utc),
+                regime="detecting",
+                n_symbols=len(symbols),
+                mode=config.mode,
+                calibration_version=config.calibration_version,
+            )
+            try:
+                send_message(bot_token=hb_token, chat_id=hb_chat,
+                              text=heartbeat)
+            except Exception as exc:
+                log.warning("scan_start_heartbeat_failed", error=str(exc))
 
     mcap_ranks_path = project_root / "data" / "mcap_ranks.yaml"
     if mcap_ranks_path.exists():
@@ -73,7 +105,6 @@ def _job_predict_scan() -> None:
             log.warning("anthropic_sdk_not_installed")
 
     # === Cache population (v0.2) ===
-    from crypto_predictor.config import load_secrets
     from crypto_predictor.sentiment.newsapi_fetcher import (
         fetch_articles_for_coin, sentiment_from_articles,
     )
@@ -148,10 +179,11 @@ def _job_predict_scan() -> None:
         asof=datetime.now(timezone.utc),
         formula_version="v1.5",
         llm_client=llm_client,
+        mode=config.mode,
+        calibration_version=config.calibration_version,
     )
 
     # === Output delivery (Task 8.5) ===
-    from crypto_predictor.config import load_secrets
     from crypto_predictor.output.markdown_report import render_daily_report
     from crypto_predictor.output.telegram_summary import (
         render_telegram_summary, render_high_conviction_alert,
@@ -161,7 +193,7 @@ def _job_predict_scan() -> None:
         load_thresholds, classify_high_conviction,
     )
 
-    slate = result["slate"]
+    slate = result.get("slate")
     asof = datetime.now(timezone.utc)
 
     # Markdown report
@@ -169,36 +201,47 @@ def _job_predict_scan() -> None:
     from crypto_predictor.validation.rolling_metrics import load_rolling_metrics_from_db
     rolling = load_rolling_metrics_from_db(predictions_db)
     regime_ceilings = ceilings_from_calibration(calibration_path)
-    report_md = render_daily_report(
-        asof=asof, regime=result["scan"]["regime"], slate=slate,
-        n_scanned=len(symbols), n_skipped=result["scan"]["n_skipped"],
-        rolling_metrics=rolling,
-        regime_ceilings=regime_ceilings,
-    )
-    report_dir = project_root / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_filename = report_dir / f"predict-{asof.strftime('%Y-%m-%d-%H%M')}.md"
-    report_filename.write_text(report_md, encoding="utf-8")
-    log.info("daily_report_written", path=str(report_filename))
-
-    # Telegram delivery
-    secrets = load_secrets(project_root / "data" / "secrets.env")
-    bot_token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = secrets.get("TELEGRAM_CHAT_ID", "")
-    if bot_token and chat_id:
-        summary_msg = render_telegram_summary(
+    if slate is not None:
+        report_md = render_daily_report(
             asof=asof, regime=result["scan"]["regime"], slate=slate,
-            report_filename=f"reports/{report_filename.name}",
+            n_scanned=len(symbols), n_skipped=result["scan"]["n_skipped"],
+            rolling_metrics=rolling,
+            regime_ceilings=regime_ceilings,
+            mode=config.mode,
         )
-        send_message(bot_token=bot_token, chat_id=chat_id, text=summary_msg)
+        report_dir = project_root / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_filename = report_dir / f"predict-{asof.strftime('%Y-%m-%d-%H%M')}.md"
+        report_filename.write_text(report_md, encoding="utf-8")
+        log.info("daily_report_written", path=str(report_filename))
+    else:
+        report_filename = None
 
-        thresholds = load_thresholds(project_root / "data" / "thresholds.yaml")
-        high_conv = classify_high_conviction(
-            slate.top_long + slate.top_short, thresholds,
-        )
-        if high_conv:
-            alert_msg = render_high_conviction_alert(high_conv[:10])
-            send_message(bot_token=bot_token, chat_id=chat_id, text=alert_msg)
+    # Telegram delivery — skip entirely if shadow_skip_telegram is set
+    if not telegram_disabled and slate is not None:
+        secrets = load_secrets(project_root / "data" / "secrets.env")
+        bot_token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = (config.telegram_chat_id_override
+                   or secrets.get("TELEGRAM_CHAT_ID", ""))
+        if bot_token and chat_id:
+            summary_msg = render_telegram_summary(
+                asof=asof, regime=result["scan"]["regime"], slate=slate,
+                report_filename=(f"reports/{report_filename.name}"
+                                 if report_filename else ""),
+            )
+            send_message(bot_token=bot_token, chat_id=chat_id,
+                          text=summary_msg)
+
+            thresholds = load_thresholds(
+                project_root / "data" / "thresholds.yaml"
+            )
+            high_conv = classify_high_conviction(
+                slate.top_long + slate.top_short, thresholds,
+            )
+            if high_conv:
+                alert_msg = render_high_conviction_alert(high_conv[:10])
+                send_message(bot_token=bot_token, chat_id=chat_id,
+                              text=alert_msg)
 
     log.info("predict_scan_done",
              n_predictions=result["scan"]["n_predictions"])
@@ -210,6 +253,11 @@ def _job_validate_pending() -> None:
         "CRYPTO_PREDICTOR_ROOT",
         Path(__file__).resolve().parents[3],
     ))
+    config = load_scheduler_config(
+        project_root / "data" / "scheduler_config.yaml"
+    )
+    log.info("scheduler_mode_loaded", mode=config.mode,
+             calibration_version=config.calibration_version)
     now = datetime.now(timezone.utc)
     n = validate_pending_predictions(
         predictions_db=project_root / "predictions.db",
@@ -230,12 +278,17 @@ def _job_validate_pending() -> None:
              n=summary["n_closed"], hit_rate=summary.get("hit_rate"),
              brier=summary.get("brier"))
 
+    # Skip Telegram entirely if shadow_skip_telegram is set
+    if config.mode == "shadow" and config.shadow_skip_telegram:
+        return
+
     secrets = load_secrets(project_root / "data" / "secrets.env")
     token = secrets.get("TELEGRAM_BOT_TOKEN", "")
-    chat = secrets.get("TELEGRAM_CHAT_ID", "")
+    chat = (config.telegram_chat_id_override
+            or secrets.get("TELEGRAM_CHAT_ID", ""))
     if not (token and chat):
         return
-    msg = format_validation_telegram(summary)
+    msg = format_validation_telegram(summary, mode=config.mode)
     if msg:
         send_message(bot_token=token, chat_id=chat, text=msg)
 
