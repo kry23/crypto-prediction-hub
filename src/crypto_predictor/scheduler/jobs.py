@@ -61,6 +61,61 @@ def _job_predict_scan() -> None:
         except ImportError:
             log.warning("anthropic_sdk_not_installed")
 
+    # === Cache population (v0.2) ===
+    from crypto_predictor.config import load_secrets
+    from crypto_predictor.sentiment.newsapi_fetcher import (
+        fetch_articles_for_coin, sentiment_from_articles,
+    )
+    from crypto_predictor.sentiment.cache_writer import write_sentiment_for_symbol
+    from crypto_predictor.global_ctx.fetcher import (
+        fetch_btc_dom_trend, write_global_for_asof,
+    )
+    import httpx as _httpx
+
+    asof_iso = datetime.now(timezone.utc).isoformat()
+    newsapi_key = (load_secrets(project_root / "data" / "secrets.env")
+                   .get("NEWSAPI_API_KEY", ""))
+    if newsapi_key:
+        http = _httpx.Client(timeout=20.0)
+        # Top 30 mcap coins by rank
+        top_symbols = sorted(
+            [(s, r) for s, r in mcap_ranks.items() if r is not None],
+            key=lambda x: x[1],
+        )[:30]
+        for sym, _rank in top_symbols:
+            base = sym.split("/")[0].lower()
+            try:
+                articles = fetch_articles_for_coin(
+                    http_client=http, api_key=newsapi_key,
+                    coin=base, hours_back=24,
+                )
+                score = sentiment_from_articles(articles)
+                write_sentiment_for_symbol(
+                    db=sentiment_cache, symbol=sym, timestamp=asof_iso,
+                    news_sent_24h=score, social_sent_24h=0.0,
+                    sent_velocity=0.0, news_volume_z=float(len(articles)),
+                )
+            except Exception as exc:
+                log.warning("sentiment_fetch_failed",
+                            symbol=sym, error=str(exc))
+        http.close()
+
+    # Global context (BTC dom)
+    try:
+        gh = _httpx.Client(timeout=20.0)
+        btc_dom = fetch_btc_dom_trend(http_client=gh)
+        gh.close()
+        write_global_for_asof(
+            db=global_cache, timestamp=asof_iso,
+            btc_dom_trend_7d=0.0,  # naive snapshot; 7d trend TBD in later iteration
+            eth_btc_trend_7d=0.0,
+            total_mcap_z=0.0,
+            sector_btc=btc_dom, sector_eth=0.0,
+            sector_defi=0.0, sector_l1=0.0,
+        )
+    except Exception as exc:
+        log.warning("global_fetch_failed", error=str(exc))
+
     result = run_full_scan(
         history_root=history_root,
         sentiment_cache=sentiment_cache,
