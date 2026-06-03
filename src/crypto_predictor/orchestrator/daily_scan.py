@@ -99,6 +99,20 @@ def run_daily_scan(*, history_root: Path,
                  composite, flag, regime, formula_version,
                  calibration_version, asof.isoformat()),
             )
+            # v0.2 — persist per-prediction feature snapshots for pattern mining
+            for fname, fvalue in feats.items():
+                if fvalue is None:
+                    continue
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO predictions_features("
+                        "prediction_id, feature_name, raw_value, z_value"
+                        ") VALUES (?, ?, ?, NULL)",
+                        (pred_id, fname, float(fvalue)),
+                    )
+                except (TypeError, ValueError):
+                    # Skip non-numeric features (string keys etc)
+                    continue
             n_predictions += 1
         conn.commit()
     finally:
