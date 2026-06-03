@@ -791,6 +791,30 @@ Built `scripts/calibration_ceiling_analysis.py` and dumped a per-regime knot his
 
 **Operational TODO** (cheap, low-risk): add a `*` badge in the markdown report whenever a coin is at the calibration ceiling, with a footnote explaining "calibration ceiling reached; ranking by |er|". Prevents user confusion. Not gating ship; can land any time.
 
+### 19.6 Pre-validation canary + manual validate CLI
+
+Investigated the 2 `status='expired' evaluation=None` rows in `predictions.db` ahead of the 11:30 UTC cohort closure to make sure they weren't a symptom of a data-pipeline gap.
+
+**Finding 1 — not a canary**: the 2 rows are `dryrun_btc_up` and `dryrun_eth_down`, hand-crafted Plan D smoke-test rows from 2026-06-01. They expired with `evaluation=None` because `_job_validate_pending` ran on 2026-06-02 16:08 UTC and called `actual_return()`, which returned None — incremental ingest didn't exist yet (it shipped in v0.2 commit `5773c8b` on 2026-06-03), so OHLCV data didn't extend to T+24h. This is exactly the gating bug v0.2 Task 11.1 fixed. The 353 real predictions are not affected — fresh incremental data will be available when they close.
+
+**Finding 2 — actual validator timing**: `_job_validate_pending` runs daily at 06:30 UTC. The 353 pending predictions were created at 2026-06-02 11:30 UTC (manual `/predict-scan`, not the 06:00 cron). They mature at 2026-06-03 11:30 UTC.
+
+The 06:30 UTC scheduler firings:
+- 2026-06-03 06:30 UTC: elapsed = 19h < 24h → cohort skipped
+- 2026-06-04 06:30 UTC: elapsed = 43h > 24h → cohort closes
+
+So the **natural validator closure is 2026-06-04 06:30 UTC, not 2026-06-03 11:30 UTC**. The journal's earlier "~2026-06-03 11:30 UTC" language was the *logical* T+24h maturity, not the actual closure time. The autonomous monitoring loop firing at 11:30 UTC today would see "still pending" if it only checks `metrics_rolling`.
+
+**Fix shipped**: `scripts/validate_pending_cli.py` — a manual trigger so the user or the autonomous loop can close mature predictions on demand, without waiting for the next 06:30 cron. Same internals as `_job_validate_pending` (calls `validate_pending_predictions(now=datetime.now(UTC))`). Smoke-tested at 09:12 UTC: returned `closed=0` because 21.7h elapsed < 24h horizon. At 11:30 UTC today, the same CLI will close all 353.
+
+**Recommended sequence for the 11:30 UTC cohort**:
+1. 11:30 UTC: `python scripts/validate_pending_cli.py` — closes the 353
+2. Immediately after: `python scripts/wildcard_analysis.py` + `python scripts/calibration_ceiling_analysis.py` — realized hit rate now visible
+3. Telegram alert (manual or post-validation hook from 19.7) — first live track record sent to the user
+4. `weekly_metrics` cron (Sunday 07:00 UTC) updates rolling 7d figures automatically
+
+This will be wired into the auto-analysis hook in 19.7 so the same observability runs automatically post-`_job_validate_pending` at 06:30 UTC daily — picking up any cohort that the manual run missed.
+
 ---
 
 *End of session journal. 2026-06-03.*
