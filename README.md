@@ -89,8 +89,14 @@ uv pip install -e ".[dev]"
 ## Commands
 
 ```powershell
+# Start the foreground scheduler — cron jobs only fire while this process is alive
+.\.venv\Scripts\python.exe scripts\run_scheduler.py
+
 # Trigger daily scan manually
 .\.venv\Scripts\python.exe scripts\predict_scan_cli.py
+
+# Close mature predictions on demand (does not wait for 06:30 cron)
+.\.venv\Scripts\python.exe scripts\validate_pending_cli.py
 
 # Show rolling track record
 .\.venv\Scripts\python.exe scripts\predict_track_cli.py
@@ -101,6 +107,12 @@ uv pip install -e ".[dev]"
 # Incremental ingest (manual)
 .\.venv\Scripts\python.exe scripts\incremental_ingest.py --root data\history
 ```
+
+> **Important**: the scheduled cron jobs (06:00 predict scan, 06:15 ingest, 06:30
+> validate, 06:45 backup, weekly metrics, monthly recalibrate) fire only while
+> `run_scheduler.py` is alive. For unattended operation, wire it under Windows Task
+> Scheduler ("At log on" trigger) or `nssm`. Without a runner, all daily cadence
+> must be triggered manually via the CLIs above.
 
 ## Secrets
 
