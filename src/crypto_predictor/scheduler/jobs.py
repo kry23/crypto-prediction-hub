@@ -12,11 +12,14 @@ import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from crypto_predictor.calibration.drift import DriftStatus, detect_drift
+from crypto_predictor.config import load_secrets
 from crypto_predictor.orchestrator.run import run_full_scan
 from crypto_predictor.orchestrator.universe import (
     assign_mcap_ranks,
     list_active_perps,
 )
+from crypto_predictor.output.telegram_delivery import send_message
 from crypto_predictor.validation.rolling_metrics import update_rolling_metrics
 from crypto_predictor.validation.validator import validate_pending_predictions
 from scripts.incremental_ingest import (
@@ -209,11 +212,52 @@ def _job_weekly_metrics() -> None:
 
 
 def _job_recalibrate() -> None:
-    """Drift check (Phase 1) — Plan D scaffold; auto-refit deferred to v0.3."""
-    log.info("recalibrate_job_start_phase1_scaffold")
-    # Phase 1: drift check via rolling Brier vs baseline.
-    # Auto-refit deferred to v0.3 (high blast radius without staging).
-    log.info("recalibrate_job_done", phase="1_scaffold_only")
+    """Drift check (Phase 1 + v0.2) — alerts via Telegram on drift."""
+    log.info("recalibrate_job_start")
+    project_root = Path(os.environ.get(
+        "CRYPTO_PREDICTOR_ROOT",
+        Path(__file__).resolve().parents[3],
+    ))
+    # Compute current 7d Brier from predictions table
+    import sqlite3
+    db = project_root / "predictions.db"
+    if not db.exists():
+        log.info("recalibrate_job_done", reason="no predictions.db")
+        return
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT p_direction, status FROM predictions "
+            "WHERE status IN ('correct','incorrect') "
+            "AND validated_at >= datetime('now', '-7 days')"
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        log.info("recalibrate_job_done", reason="no closed predictions in 7d")
+        return
+    # Brier = mean of (p - label)^2
+    labels = [1 if r[1] == "correct" else 0 for r in rows]
+    probs = [r[0] for r in rows]
+    brier = sum((p - l) ** 2 for p, l in zip(probs, labels)) / len(rows)
+
+    status = detect_drift(current_brier=brier,
+                          backtest_brier=0.226, delta=0.05)
+    log.info("recalibrate_drift_check",
+             current_brier=brier, status=str(status))
+
+    if status == DriftStatus.DRIFT:
+        secrets = load_secrets(project_root / "data" / "secrets.env")
+        token = secrets.get("TELEGRAM_BOT_TOKEN", "")
+        chat = secrets.get("TELEGRAM_CHAT_ID", "")
+        if token and chat:
+            msg = (f"⚠ CALIBRATION DRIFT DETECTED\n"
+                   f"Current 7d Brier: {brier:.3f}\n"
+                   f"Backtest baseline: 0.226\n"
+                   f"Delta: +{brier - 0.226:.3f}\n"
+                   f"Action: manually run recalibration script or "
+                   f"trust degraded predictions cautiously.")
+            send_message(bot_token=token, chat_id=chat, text=msg)
 
 
 def _job_incremental_ingest() -> None:
