@@ -11,6 +11,9 @@ import structlog
 from crypto_predictor.features.compute import compute_features
 from crypto_predictor.features.fetcher import FeatureFetcher
 from crypto_predictor.orchestrator.daily_scan import run_daily_scan
+from crypto_predictor.orchestrator.feature_completeness import (
+    detect_feature_completeness,
+)
 from crypto_predictor.orchestrator.llm_summary import (
     generate_rationale, summarize_top_signals,
 )
@@ -81,9 +84,33 @@ def run_full_scan(*, history_root: Path,
                   formula_version: str,
                   global_mcap_trend: float = 0.0,
                   k_long: int = 20, k_short: int = 20,
-                  llm_client=None) -> dict:
-    """End-to-end daily scan: predict + persist + rank + narrate."""
+                  llm_client=None,
+                  mode: str = "live",
+                  calibration_version: str = "1_5_4") -> dict:
+    """End-to-end daily scan: predict + persist + rank + narrate.
+
+    v0.2.1: ``mode`` (``"live"`` | ``"shadow"``) and ``calibration_version``
+    are threaded through to the persistence layer so each prediction row
+    records the runtime context. ``feature_completeness`` is derived from
+    cache-file existence (first-cut approximation — passing ``None`` for the
+    feature dicts means ``detect_feature_completeness`` falls back to
+    file-existence-only checks, which matches the v0.2.1 spec for the
+    operator-visibility loop).
+    """
     _log_missing_caches(sentiment_cache, global_cache)
+    # First-cut approximation: rely on file-existence checks via passing
+    # None for the feature dicts. Per-symbol feature dicts are populated
+    # downstream inside run_daily_scan; pre-computing them here would
+    # duplicate work and require re-plumbing FeatureFetcher. For v0.2.1
+    # this is sufficient because cache absence is the dominant degraded
+    # signal we want to flag.
+    completeness, missing_features = detect_feature_completeness(
+        sentiment_cache=sentiment_cache, global_cache=global_cache,
+        sentiment_features=None, global_features=None,
+    )
+    log.info("feature_completeness_detected",
+             completeness=completeness, missing_features=missing_features,
+             mode=mode, calibration_version=calibration_version)
     scan = run_daily_scan(
         history_root=history_root,
         sentiment_cache=sentiment_cache, global_cache=global_cache,
@@ -92,6 +119,9 @@ def run_full_scan(*, history_root: Path,
         symbols=symbols, mcap_ranks=mcap_ranks,
         asof=asof, formula_version=formula_version,
         global_mcap_trend=global_mcap_trend,
+        mode=mode,
+        feature_completeness=completeness,
+        missing_features=missing_features,
     )
 
     rows = _load_predictions(predictions_db, asof)

@@ -81,8 +81,16 @@ def run_daily_scan(*, history_root: Path,
                    asof: datetime,
                    formula_version: str,
                    global_mcap_trend: float = 0.0,
-                   horizon_hours: int = 24) -> dict:
-    """Run the daily scan: predict for every symbol, persist to predictions.db."""
+                   horizon_hours: int = 24,
+                   mode: str = "live",
+                   feature_completeness: str = "full",
+                   missing_features: str | None = None) -> dict:
+    """Run the daily scan: predict for every symbol, persist to predictions.db.
+
+    v0.2.1: ``mode`` / ``feature_completeness`` / ``missing_features`` are
+    written alongside each row so shadow-mode runs are distinguishable from
+    live ones. Defaults preserve pre-v0.2.1 behaviour.
+    """
     log.info("daily_scan_start", asof=asof.isoformat(), n_symbols=len(symbols))
 
     calibs = load_calibration(calibration_path) if calibration_path else RegimeCalibrators()
@@ -131,11 +139,13 @@ def run_daily_scan(*, history_root: Path,
                 "INSERT INTO predictions ("
                 "id, symbol, horizon_hours, prediction, p_direction, target_value, "
                 "composite_score, confidence_flag, regime, formula_version, "
-                "calibration_version, status, created_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                "calibration_version, status, created_at, "
+                "mode, feature_completeness, missing_features"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
                 (pred_id, sym, horizon_hours, prediction, p_direction, expected_ret,
                  composite, flag, regime, formula_version,
-                 calibration_version, asof.isoformat()),
+                 calibration_version, asof.isoformat(),
+                 mode, feature_completeness, missing_features),
             )
             # v0.2 — persist per-prediction feature snapshots for pattern mining
             for fname, fvalue in feats.items():
