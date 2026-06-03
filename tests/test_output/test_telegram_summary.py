@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from crypto_predictor.orchestrator.ranker import RankedSlate
 from crypto_predictor.output.telegram_summary import (
     render_telegram_summary, render_high_conviction_alert,
+    render_scan_start_heartbeat,
 )
 
 
@@ -42,3 +43,33 @@ def test_render_high_conviction_alert_lists_candidates():
     assert "SOL" in msg
     assert "AVAX" in msg
     assert "High Conv" in msg or "high conv" in msg.lower()
+
+
+def test_scan_start_heartbeat_shadow_one_line():
+    asof = datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc)
+    msg = render_scan_start_heartbeat(asof=asof, regime="CHOP", n_symbols=336,
+                                        mode="shadow",
+                                        calibration_version="1_5_4")
+    assert msg.count("\n") == 0
+    assert "\U0001f52c" in msg
+    assert "06:00" in msg
+    assert "336" in msg
+    assert "CHOP" in msg
+    assert "shadow" in msg.lower()
+
+
+def test_scan_start_heartbeat_live_variant():
+    asof = datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc)
+    msg = render_scan_start_heartbeat(asof=asof, regime="CHOP", n_symbols=336,
+                                        mode="live",
+                                        calibration_version="0_3_0")
+    assert "\U0001f4ca" in msg
+    assert "live" in msg.lower()
+
+
+def test_scan_start_heartbeat_includes_calibration_version():
+    asof = datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc)
+    msg = render_scan_start_heartbeat(asof=asof, regime="BULL", n_symbols=340,
+                                        mode="live",
+                                        calibration_version="0_3_0")
+    assert "0_3_0" in msg

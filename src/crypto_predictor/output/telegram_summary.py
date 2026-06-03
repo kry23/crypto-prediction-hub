@@ -50,3 +50,12 @@ def render_high_conviction_alert(candidates: list[dict]) -> str:
             f"ret={p['target_value']:+.1%}\n  {rationale}"
         )
     return "\n".join(lines)
+
+
+def render_scan_start_heartbeat(*, asof: datetime, regime: str,
+                                  n_symbols: int, mode: str,
+                                  calibration_version: str) -> str:
+    """One-line scan-start heartbeat. Format: emoji + time + size + regime + mode + cal."""
+    emoji = "\U0001f52c" if mode == "shadow" else "\U0001f4ca"
+    return (f"{emoji} {asof.strftime('%H:%M')} scan start — "
+            f"{n_symbols} sym, {regime}, mode={mode}, cal={calibration_version}")
