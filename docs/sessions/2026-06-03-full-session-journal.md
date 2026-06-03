@@ -906,6 +906,58 @@ Composite = `p_direction × |target_value|` typically sits at 0.005-0.040. As `0
 
 **What's not yet fixed**: The `eth_btc_trend_7d` kwarg of `write_global_for_asof` now actually carries ETH-*dominance* trend (not ETH/BTC ratio). Misleading name kept for Plan A backwards compat — proper schema migration is queued for v0.3 ML upgrade.
 
+### 19.10 First live cohort closed — and the calibration imploded
+
+**Outcome**: Hit rate **32.8%** (329 evaluable / 353 closed), Brier **0.346**. Backtest baseline was 62.5% / 0.226. The model came in 30pp under coin-flip. Full analysis in `docs/analyses/2026-06-03-first-live-observation.md`.
+
+**The recovery saga** (commits `13a7bb1` + the failed-validate path):
+1. At 12:25 UTC I ran `validate_pending_cli.py` per the 19.6 plan. Validator closed 353 rows with `status='expired'`, `evaluation=None`. Post-validation summary returned `n_closed=0`.
+2. Probed: latest OHLCV bar was 2026-06-02 21:00 UTC — 14.5 hours older than the cohort's T+24h target.
+3. Probed the scheduler: `incremental.log` last write 2026-06-02 22:18 UTC (the user's manual ingest from yesterday). No log entries after that.
+4. **Root cause**: `build_scheduler()` returns `BackgroundScheduler.start(paused=True)` for safe unit-testing. **No production entry point ever called `.resume()`**. The cron jobs (predict_scan, incremental_ingest, validate_pending, backup_databases, weekly_metrics, recalibrate) were registered in code but never fired in production. v0.2 was named "Production Lifeline" and shipped the cron registry; the runner that actually executes the registry never existed.
+5. **Built `scripts/run_scheduler.py`** — calls `build_scheduler()`, `.resume()`, blocks on a threading.Event, registers SIGINT/SIGTERM for graceful shutdown. 2 tests via `run_until_signal(stop_event=)` injection. README updated with the explicit warning that without this runner, all daily cadence must be triggered manually.
+6. Reset the 353 erroneously-expired rows back to `status='pending'` (2 pre-existing dryrun rows from §19.6 preserved by validating_at-timestamp filter).
+7. Ran `scripts/incremental_ingest.py --skip-futures` manually in the background (`bh2labntv`) — 32,810 new bars across 340 symbols in ~9 minutes.
+8. Re-ran `validate_pending_cli.py` at 12:35 UTC. **329 closed correctly, Telegram digest delivered successfully**.
+
+**The numbers themselves are damning**:
+
+| metric | live | baseline | δ |
+|---|---|---|---|
+| hit rate | 32.8% | 62.5% | **−29.7pp** |
+| Brier | 0.346 | 0.226 | +0.120 |
+| up calls | 12.5% (22/176) | — | catastrophic |
+| down calls | 56.2% (86/153) | — | OK |
+| p ∈ [0.70, 0.95) | 0–12.5% | 73–89% | **−65 to −77pp** |
+| ceiling-hit (5 names) | 1/4 correct = 25% | ~92% | confirms anti-calibration |
+| SPCX +26.57% predicted | actual −5.5% | — | magnitude broken ×6 |
+
+The system is **anti-calibrated above p = 0.55**. Higher confidence → worse outcomes. The lowest-confidence bucket beat its expected rate; every higher bucket underperformed by 20-77pp.
+
+**Compounding factors that explain (but do not excuse) the miss**:
+1. **Sentiment cache empty during the 11:30 UTC scan** — the NewsAPI date-format fix shipped (`8ebbc52`) after the cohort was already generated, so all 353 predictions used `news_sent_24h=0`, `social_sent_24h=0`, etc. One of six tilts was silently neutral.
+2. **Global cache hardcoded NEUTRAL** — `btc_dom_trend_7d=0.0`, `total_mcap_z=0.0` were stubs until §19.9 Task 1 (`0acc7da`), which shipped after the cohort. Cross-coin tilt also silently neutral.
+3. **100% CHOP regime** — backtest training distribution had ~50% BULL, but this cohort was universe-wide CHOP. Model's per-regime weights are most stressed here.
+4. **CHOP momentum-flip pointed exactly wrong** — Phase 1.5 weights set `MOMENTUM_FLIP_BY_REGIME["CHOP"] = -1` (contrarian-long), but 2026-06-02 → 2026-06-03 was clearly a trending-down 24h window. The mean-reversion bias amplified the up-side disaster.
+5. **Tokenized equity perps** (SPCX/RKLB/CRWD/XLE) injected into the universe — thin history breaks the realized-vol magnitude estimator, and these slots displaced legitimate crypto signal.
+
+**Ceiling-hit verdict from §19.5**:
+- Threshold: "≤2 of 5 correct → fast-track v0.3 calibration revision"
+- Result: 1 of 5 evaluable correct (only ATOM). v0.3 calibration is no longer aspirational — it is the next required work.
+
+**Decisions that need user input (will not auto-act)**:
+- **Should we run the 06:00 UTC scan tomorrow?** With the current calibration the system will produce another cohort with the same broken numbers and send Telegram alerts on it. I'm leaving `_job_predict_scan` enabled but flagging it.
+- **Equity-perp blacklist** — SPCX/RKLB/CRWD/XLE filter into a `data/equity_blacklist.yaml`. Cheap, but needs the user's decision on whether to also filter prefixes/patterns or just an exact list.
+- **Calibration revision approach** — Platt / beta-binomial / hybrid / extended window. Each has different effort and different failure modes. Worth a brainstorm before picking.
+
+**What worked despite the disaster**:
+- The validation infrastructure built in Plan D + v0.2 + the pre-validation polish batch (§19.6–19.8) **surfaced this in under 90 seconds**. The user did not have to discover this by eye; the Telegram digest delivered the hit rate, Brier, and breakdowns in one message.
+- The model failed loudly; the observability did exactly what it was designed to do. We're now in the position the §19 success criteria were written for: data-driven retuning informed by live evidence, not vibes.
+
+**What this means for v0.3 scope**:
+- v0.3 calibration revision moves from "v0.3 candidate" to "**v0.3 blocker for next live deploy**". The LightGBM ML upgrade can wait; the calibration fix cannot.
+- The §19.9 housekeeping batch ships an `eth_dom_trend_7d` that *will* populate over 7 days. Should be re-evaluated after that fill window: do the cross-coin tilts actually pick up signal when fed real values?
+
 ---
 
 *End of session journal. 2026-06-03.*
