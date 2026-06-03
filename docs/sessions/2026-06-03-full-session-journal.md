@@ -877,6 +877,35 @@ Why a `*` and not a colored bar or different cell: the report is plain markdown 
 
 **What the user sees tomorrow at 06:00 UTC**: the four NORMAL ceiling-hit predictions from today's snapshot (BERA, CELO, ATOM, SAND) — if they're still in the slate — render as `0.92*` with the footnote making clear that ranking among them is by magnitude alone. No more silent ambiguity.
 
+### 19.9 Pre-v0.3 housekeeping batch (subagent-driven)
+
+Three small fix-ups dispatched sequentially via implementer subagents (commits `0acc7da`, `9b3b769`, `b26f297`):
+
+**Task 1 — Real 7d trends from cached snapshot history** (`0acc7da`)
+Killed the `btc_dom_trend_7d=0.0  # naive snapshot; 7d trend TBD` stub at `jobs.py:119`. Added in `global_ctx/fetcher.py`:
+- `fetch_dominance_snapshot()` — pulls both BTC and ETH dominance from the same CoinGecko `/global` payload (free tier; no extra cost).
+- `read_sector_history(db, sector_col, lookback_days)` — reads ASC-ordered snapshots, allowlist-guarded against SQL injection on the column name.
+- `compute_trend_pct(history)` — relative change `(last-first)/first`; returns 0.0 when `<2` samples (warming up) or zero denominator.
+
+Wired into `_job_predict_scan`: real 7d trend instead of zeros, and ETH dominance now starts accumulating (was hardcoded to 0.0, which kept ETH trend artificially flat forever). First live snapshot tomorrow still reports 0.0 (only 1 row of history); fills out by day 7. +11 tests.
+
+**Task 2 — Once-per-scan cache-missing warning** (`9b3b769`)
+Operational debt from the Plan C dry-run. When `sentiment_cache.db` or `global_cache.db` is absent, every prediction silently uses NEUTRAL feature values — a fetcher outage degrades the whole scan with zero log evidence. Added `_log_missing_caches()` at the top of `run_full_scan` — one structured warning per missing cache file, max two log lines per scan. NEUTRAL fallback in `compute_*_features` unchanged. +3 tests.
+
+The right place to log was at the orchestrator boundary, not inside `compute_sentiment_features` / `compute_global_features` (which fire 340 times per scan and would spam the log).
+
+**Task 3 — Composite score in basis points** (`b26f297`)
+Composite = `p_direction × |target_value|` typically sits at 0.005-0.040. As `0.013` it is hard to read and harder to compare row-to-row; as `130bp` it is the conventional trading unit. Display-only change in `markdown_report._row` — column header is now `Composite (bp)`. Storage and ranking math unchanged. Wild-card section left bulleted (no composite shown). +1 test.
+
+**Subagent-driven workflow notes**:
+- Each task ran as a single implementer subagent dispatch with a focused prompt (file paths, exact line numbers, signatures, constraints).
+- Skipped the formal spec-reviewer + code-quality-reviewer subagents from the full subagent-driven-development pattern — controller (me) reviewed diffs + ran tests directly. For 30-50 LOC tasks the two-stage review subagent overhead was disproportionate to the work; for v0.3 LightGBM tasks the full pattern will be worth it.
+- All three implementer reports were accurate (file paths, test counts, signatures all matched on review). One nit: Task 3's prompt had an arithmetic inconsistency in the example values; the implementer flagged it and chose the formula-consistent interpretation.
+
+**Test count progression**: 216 → 227 → 230 → 231, all green throughout. v0.2 → housekeeping delta: +15 tests, ~40 LOC implementation per task.
+
+**What's not yet fixed**: The `eth_btc_trend_7d` kwarg of `write_global_for_asof` now actually carries ETH-*dominance* trend (not ETH/BTC ratio). Misleading name kept for Plan A backwards compat — proper schema migration is queued for v0.3 ML upgrade.
+
 ---
 
 *End of session journal. 2026-06-03.*
