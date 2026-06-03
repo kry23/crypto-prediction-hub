@@ -115,6 +115,26 @@ uv pip install -e ".[dev]"
 > Scheduler ("At log on" trigger) or `nssm`. Without a runner, all daily cadence
 > must be triggered manually via the CLIs above.
 
+## Scheduler config
+
+The runtime mode and active calibration version live in
+`data/scheduler_config.yaml`. Defaults are `mode: shadow` and
+`calibration_version: 1_5_4`. Edit the file and restart
+`scripts/run_scheduler.py` to apply changes.
+A `.example` is at `data/scheduler_config.yaml.example`.
+
+**Shadow mode** means: the scheduler runs predict + validate + backup
+exactly as in live mode, but predictions are persisted with `mode='shadow'`,
+the markdown report H1 reads `🔬 Crypto Predictor — SHADOW Daily Report`,
+and the post-validation Telegram digest is prefixed `🔬 Shadow validation`.
+No live alert is sent under shadow.
+
+To fully silence Telegram during shadow runs, set
+`shadow_skip_telegram: true` in the yaml. Scan-start heartbeat and the
+post-validation digest are then suppressed entirely.
+
+`git diff` on this file = audit trail of mode and calibration version flips.
+
 ## Secrets
 
 Copy `data/secrets.env.example` → `data/secrets.env` and fill in:
