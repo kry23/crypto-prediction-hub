@@ -852,6 +852,31 @@ python scripts/validate_pending_cli.py
 ```
 Closes the 353, computes the digest, sends Telegram. The standalone `wildcard_analysis.py` and `calibration_ceiling_analysis.py` remain available for deep-dive analysis but are no longer required for the first-look summary.
 
+### 19.8 Calibration ceiling badge in daily markdown
+
+Implemented the operational TODO from 19.5. The daily markdown report now appends a `*` suffix to any `P↑`/`P↓` value within ±0.001 of the active regime's calibration ceiling, and adds a footnote under each table when at least one row is badged:
+
+```
+| 1 | BERA/USDT:USDT | 0.92* | +2.55% | 0.023 | … |
+| 2 | CELO/USDT:USDT | 0.92* | +2.15% | 0.020 | … |
+| 3 | ETH/USDT:USDT  | 0.72  | +3.00% | 0.022 | … |
+
+*\* = calibration ceiling reached (0.92); ranking by |expected return|.*
+```
+
+Implementation surface:
+- `crypto_predictor.calibration.persistence.ceilings_from_calibration(path) -> dict[str, float]` — pulls `max(y)` per regime from the active calibration JSON. Returns `{}` if file missing.
+- `crypto_predictor.output.markdown_report` — new `regime_ceilings` kwarg threaded into `_row()` and `_ceiling_footnote()`. Backwards compatible (badge skipped when kwarg absent).
+- `_job_predict_scan` reads the active calibration via `ceilings_from_calibration(calibration_path)` and passes the dict to `render_daily_report`.
+
+Wild card section also gets the badge — DOOD at 0.9198 reads `**DOOD/USDT:USDT** P=0.92*`. Tolerance is 1e-3 to handle float-formatting rounding while staying tight enough not to false-positive nearby values.
+
+Why a `*` and not a colored bar or different cell: the report is plain markdown rendered in Telegram + IDE + GitHub; ANSI/HTML aren't portable. The `*` + footnote pattern is conventional academic notation and survives all three rendering surfaces.
+
+6 new tests (4 for markdown badge logic, 3 for ceiling extraction). Total: 210 → 216, all green.
+
+**What the user sees tomorrow at 06:00 UTC**: the four NORMAL ceiling-hit predictions from today's snapshot (BERA, CELO, ATOM, SAND) — if they're still in the slate — render as `0.92*` with the footnote making clear that ranking among them is by magnitude alone. No more silent ambiguity.
+
 ---
 
 *End of session journal. 2026-06-03.*

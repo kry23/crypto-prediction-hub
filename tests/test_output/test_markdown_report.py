@@ -32,3 +32,71 @@ def test_render_daily_report_includes_all_sections():
     assert "AGIX/USDT:USDT" in md
     assert "Wild Cards" in md
     assert "Validation Track Record" in md
+
+
+def test_ceiling_badge_applied_when_p_at_regime_ceiling():
+    slate = RankedSlate(
+        top_long=[
+            {"symbol": "BERA/USDT:USDT", "p_direction": 0.9198,
+             "target_value": 0.025, "composite_score": 0.023,
+             "rationale": "Ceiling-hit"},
+            {"symbol": "ETH/USDT:USDT", "p_direction": 0.72,
+             "target_value": 0.03, "composite_score": 0.022,
+             "rationale": "Below ceiling"},
+        ],
+        top_short=[],
+        wild_cards=[
+            {"symbol": "DOOD/USDT:USDT", "p_direction": 0.9198,
+             "target_value": 0.022, "composite_score": 0.014,
+             "rationale": "Ceiling-hit anomaly"},
+        ],
+    )
+    md = render_daily_report(
+        asof=datetime(2026, 6, 3, 6, 0, tzinfo=timezone.utc),
+        regime="CHOP",
+        slate=slate,
+        n_scanned=340, n_skipped=0,
+        rolling_metrics={},
+        regime_ceilings={"CHOP": 0.9198, "BULL": 1.0},
+    )
+    assert "BERA/USDT:USDT | 0.92*" in md
+    assert "ETH/USDT:USDT | 0.72 " in md
+    assert "DOOD/USDT:USDT** P=0.92*" in md
+    assert "calibration ceiling reached (0.92)" in md
+
+
+def test_no_ceiling_badge_when_no_predictions_at_ceiling():
+    slate = RankedSlate(
+        top_long=[
+            {"symbol": "ETH/USDT:USDT", "p_direction": 0.72,
+             "target_value": 0.03, "composite_score": 0.022,
+             "rationale": "Below ceiling"},
+        ],
+        top_short=[],
+        wild_cards=[],
+    )
+    md = render_daily_report(
+        asof=datetime(2026, 6, 3, 6, 0, tzinfo=timezone.utc),
+        regime="CHOP", slate=slate, n_scanned=10, n_skipped=0,
+        rolling_metrics={}, regime_ceilings={"CHOP": 0.9198},
+    )
+    assert "calibration ceiling reached" not in md
+    assert "0.72*" not in md
+    assert "| 0.72 |" in md
+
+
+def test_render_daily_report_works_without_regime_ceilings():
+    slate = RankedSlate(
+        top_long=[{"symbol": "BTC/USDT:USDT", "p_direction": 0.65,
+                   "target_value": 0.02, "composite_score": 0.013,
+                   "rationale": ""}],
+        top_short=[], wild_cards=[],
+    )
+    md = render_daily_report(
+        asof=datetime(2026, 6, 3, 6, 0, tzinfo=timezone.utc),
+        regime="BULL", slate=slate, n_scanned=1, n_skipped=0,
+        rolling_metrics={},
+    )
+    assert "BTC/USDT:USDT" in md
+    assert "0.65" in md
+    assert "ceiling" not in md.lower()

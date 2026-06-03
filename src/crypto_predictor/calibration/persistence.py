@@ -37,3 +37,20 @@ def load_calibration(path: Path) -> RegimeCalibrators:
         ir.fit(x, y)
         calibs.by_regime[regime] = ir
     return calibs
+
+
+def ceilings_from_calibration(path: Path) -> dict[str, float]:
+    """Return {regime: max(y)} for each regime in the calibration JSON.
+
+    Used by the daily report to mark predictions whose p_direction is saturated
+    against the isotonic map's upper bound, where ranking reduces to magnitude.
+    Returns {} if the file is missing.
+    """
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        regime: max(payload["y"])
+        for regime, payload in data.get("regimes", {}).items()
+        if payload.get("y")
+    }

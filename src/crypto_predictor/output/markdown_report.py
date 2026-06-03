@@ -5,20 +5,45 @@ from datetime import datetime
 
 from crypto_predictor.orchestrator.ranker import RankedSlate
 
+CEILING_TOLERANCE = 1e-3
 
-def _row(idx: int, p: dict) -> str:
+
+def _is_at_ceiling(p_value: float, ceiling: float | None) -> bool:
+    return ceiling is not None and abs(p_value - ceiling) < CEILING_TOLERANCE
+
+
+def _format_p(p_value: float, at_ceiling: bool) -> str:
+    return f"{p_value:.2f}*" if at_ceiling else f"{p_value:.2f}"
+
+
+def _row(idx: int, p: dict, ceiling: float | None = None) -> str:
+    at_ceiling = _is_at_ceiling(p["p_direction"], ceiling)
     return (
         f"| {idx} | {p['symbol']} | "
-        f"{p['p_direction']:.2f} | "
+        f"{_format_p(p['p_direction'], at_ceiling)} | "
         f"{p['target_value']:+.2%} | "
         f"{p['composite_score']:.3f} | "
         f"{p.get('rationale', '')[:120]} |"
     )
 
 
+def _ceiling_footnote(predictions: list[dict], ceiling: float | None) -> str:
+    if ceiling is None:
+        return ""
+    if not any(_is_at_ceiling(p["p_direction"], ceiling) for p in predictions):
+        return ""
+    return (
+        f"*\\* = calibration ceiling reached ({ceiling:.2f}); "
+        "ranking by |expected return|.*"
+    )
+
+
 def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
                         n_scanned: int, n_skipped: int,
-                        rolling_metrics: dict[str, dict]) -> str:
+                        rolling_metrics: dict[str, dict],
+                        regime_ceilings: dict[str, float] | None = None) -> str:
+    ceiling = (regime_ceilings or {}).get(regime)
+
     lines = [
         f"# Crypto Predictor — Daily Report",
         f"**{asof.strftime('%Y-%m-%d %H:%M UTC')}** | Regime: **{regime}** | "
@@ -37,7 +62,11 @@ def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
         "|---|---|---|---|---|---|",
     ]
     for i, p in enumerate(slate.top_long, start=1):
-        lines.append(_row(i, p))
+        lines.append(_row(i, p, ceiling))
+    long_footnote = _ceiling_footnote(slate.top_long, ceiling)
+    if long_footnote:
+        lines.append("")
+        lines.append(long_footnote)
     lines.append("")
 
     lines += [
@@ -47,16 +76,26 @@ def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
         "|---|---|---|---|---|---|",
     ]
     for i, p in enumerate(slate.top_short, start=1):
-        lines.append(_row(i, p))
+        lines.append(_row(i, p, ceiling))
+    short_footnote = _ceiling_footnote(slate.top_short, ceiling)
+    if short_footnote:
+        lines.append("")
+        lines.append(short_footnote)
     lines.append("")
 
     if slate.wild_cards:
         lines += ["## 🃏 Wild Cards (anomaly, handle with caution)", ""]
         for p in slate.wild_cards:
+            at_ceiling = _is_at_ceiling(p["p_direction"], ceiling)
             lines.append(
-                f"- **{p['symbol']}** P={p['p_direction']:.2f} "
+                f"- **{p['symbol']}** "
+                f"P={_format_p(p['p_direction'], at_ceiling)} "
                 f"ret={p['target_value']:+.2%} — {p.get('rationale', '')[:140]}"
             )
+        wild_footnote = _ceiling_footnote(slate.wild_cards, ceiling)
+        if wild_footnote:
+            lines.append("")
+            lines.append(wild_footnote)
         lines.append("")
 
     if rolling_metrics:

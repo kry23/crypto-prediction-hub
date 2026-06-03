@@ -154,12 +154,15 @@ def _job_predict_scan() -> None:
     asof = datetime.now(timezone.utc)
 
     # Markdown report
+    from crypto_predictor.calibration.persistence import ceilings_from_calibration
     from crypto_predictor.validation.rolling_metrics import load_rolling_metrics_from_db
     rolling = load_rolling_metrics_from_db(predictions_db)
+    regime_ceilings = ceilings_from_calibration(calibration_path)
     report_md = render_daily_report(
         asof=asof, regime=result["scan"]["regime"], slate=slate,
         n_scanned=len(symbols), n_skipped=result["scan"]["n_skipped"],
         rolling_metrics=rolling,
+        regime_ceilings=regime_ceilings,
     )
     report_dir = project_root / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
