@@ -19,6 +19,14 @@ from crypto_predictor.orchestrator.ranker import rank_predictions, RankedSlate
 log = structlog.get_logger(__name__)
 
 
+def _log_missing_caches(sentiment_cache: Path, global_cache: Path) -> None:
+    """Emit one warning per missing cache file (operator visibility)."""
+    if not sentiment_cache.exists():
+        log.warning("cache_missing", cache="sentiment", path=str(sentiment_cache))
+    if not global_cache.exists():
+        log.warning("cache_missing", cache="global", path=str(global_cache))
+
+
 def _narrate_slate(slate: RankedSlate, *, fetcher: FeatureFetcher,
                    sentiment_cache: Path, global_cache: Path,
                    sector_map: Path, mcap_ranks: dict[str, int | None],
@@ -75,6 +83,7 @@ def run_full_scan(*, history_root: Path,
                   k_long: int = 20, k_short: int = 20,
                   llm_client=None) -> dict:
     """End-to-end daily scan: predict + persist + rank + narrate."""
+    _log_missing_caches(sentiment_cache, global_cache)
     scan = run_daily_scan(
         history_root=history_root,
         sentiment_cache=sentiment_cache, global_cache=global_cache,
