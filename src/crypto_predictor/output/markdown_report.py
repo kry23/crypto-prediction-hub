@@ -41,13 +41,21 @@ def _ceiling_footnote(predictions: list[dict], ceiling: float | None) -> str:
 def render_daily_report(*, asof: datetime, regime: str, slate: RankedSlate,
                         n_scanned: int, n_skipped: int,
                         rolling_metrics: dict[str, dict],
-                        regime_ceilings: dict[str, float] | None = None) -> str:
+                        regime_ceilings: dict[str, float] | None = None,
+                        mode: str = "live") -> str:
     ceiling = (regime_ceilings or {}).get(regime)
 
+    if mode == "shadow":
+        title = "# 🔬 Crypto Predictor — SHADOW Daily Report"
+        meta_suffix = " | Mode: SHADOW"
+    else:
+        title = "# Crypto Predictor — Daily Report"
+        meta_suffix = ""
+
     lines = [
-        f"# Crypto Predictor — Daily Report",
+        title,
         f"**{asof.strftime('%Y-%m-%d %H:%M UTC')}** | Regime: **{regime}** | "
-        f"Universe: ~340 OKX Global USDT-Perp",
+        f"Universe: ~340 OKX Global USDT-Perp{meta_suffix}",
         "",
         "## Summary",
         f"- Scanned: {n_scanned} coins ({n_scanned - n_skipped} successful, "

@@ -118,3 +118,35 @@ def test_composite_score_rendered_as_basis_points():
     assert "Composite (bp)" in md
     assert "2.7bp" in md
     assert "0.000" not in md  # old raw decimal format must be gone
+
+
+def test_shadow_mode_renders_shadow_title():
+    slate = RankedSlate(top_long=[], top_short=[], wild_cards=[])
+    md = render_daily_report(
+        asof=datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc),
+        regime="CHOP", slate=slate, n_scanned=336, n_skipped=0,
+        rolling_metrics={}, mode="shadow",
+    )
+    assert "SHADOW Daily Report" in md
+    assert "Mode: SHADOW" in md
+
+
+def test_live_mode_keeps_default_title():
+    slate = RankedSlate(top_long=[], top_short=[], wild_cards=[])
+    md = render_daily_report(
+        asof=datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc),
+        regime="CHOP", slate=slate, n_scanned=336, n_skipped=0,
+        rolling_metrics={}, mode="live",
+    )
+    assert "SHADOW Daily Report" not in md
+    assert "Crypto Predictor — Daily Report" in md
+
+
+def test_default_mode_is_live():
+    slate = RankedSlate(top_long=[], top_short=[], wild_cards=[])
+    md = render_daily_report(
+        asof=datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc),
+        regime="CHOP", slate=slate, n_scanned=336, n_skipped=0,
+        rolling_metrics={},
+    )
+    assert "SHADOW" not in md
