@@ -20,6 +20,13 @@ from __future__ import annotations
 import signal
 import sys
 import threading
+from pathlib import Path
+
+# Project root must be on sys.path so scheduler.jobs can `from scripts.X import Y`.
+# When invoked as `python scripts/run_scheduler.py`, Python only adds scripts/
+# to sys.path; pytest adds the project root automatically but the runtime
+# script does not. Without this line jobs.py fails at import.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import structlog
 
