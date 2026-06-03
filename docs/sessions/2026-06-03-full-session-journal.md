@@ -717,6 +717,34 @@ CHANGELOG follows loose Keep-a-Changelog format. Versioning intent:
 - **v0.3** = LightGBM ML upgrade
 - **v0.4+** = vocabulary v2, 4h horizon, sector overlay
 
+### 19.3 Nightly SQLite backups (commit `b34f679`)
+
+`predictions.db` is the single source of truth for the entire validation loop: closed predictions, rolling metrics, pattern history, the future calibration learning signal. A schema mistake during a v0.3 ML migration, or even a disk-level corruption, would erase months of irreproducible live track record. Backtests can be re-run; live realized outcomes cannot.
+
+Built `scripts/backup_databases.py` that:
+- Uses sqlite3's online backup API (safe to run while the scheduler is writing — proven by `test_snapshot_one_works_while_source_open_for_write`)
+- Snapshots `predictions.db` + `data/global_cache.db` + `data/sentiment_cache.db` (when present)
+- Writes to `~/.crypto-predictor-backups/{db_name}-YYYY-MM-DD-HHMM.db`
+- Prunes per-DB family to last 14 snapshots (≈2 weeks of dailies)
+- Skips missing DBs silently (sentiment_cache won't exist until the next 06:00 UTC scan populates it)
+
+Wired into scheduler at **06:45 UTC** — 15 minutes after `validate_pending`, so the snapshot captures the freshly-realized T+24h outcomes. The full cron table is now:
+
+| Time | Job |
+|---|---|
+| 06:00 | predict_scan |
+| 06:15 | incremental_ingest |
+| 06:30 | validate_pending |
+| 06:45 | **backup_databases** ← new |
+| Sun 07:00 | weekly_metrics |
+| Monthly 1st 07:00 | recalibrate |
+
+Smoke-tested live: 196 KB predictions.db + 20 KB global_cache.db snapshotted in <50ms, valid SQLite readback. 8 unit tests + 1 scheduler test, all green.
+
+**Why not just file-copy?** A naïve `cp predictions.db backup.db` while SQLite is mid-transaction can yield a torn snapshot (header lies about page count, WAL not flushed). The online backup API page-walks safely and is the documented correct way.
+
+**Why outside the repo?** `~/.crypto-predictor-backups/` rather than `./backups/` keeps the working directory clean, dodges any future gitignore mishap, and survives `git clean -fdx`.
+
 ---
 
 *End of session journal. 2026-06-03.*
