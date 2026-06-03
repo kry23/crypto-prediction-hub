@@ -977,6 +977,47 @@ The historical parquet files in `data/history/` are intentionally untouched. Ret
 
 8 new tests. Suite 233 → 241 green. Track A complete.
 
+### 19.12 v0.2.1 shadow infrastructure shipped (commits `ae7780f`..`7b94ad4`)
+
+After the calibration disaster surfaced in §19.10, brainstorm + spec + plan + subagent-driven execution: 11 code tasks shipped sequentially, 1 operational task closed.
+
+**Shipping pattern**: each task = single implementer subagent dispatch with a focused prompt (file paths, exact line numbers, reference impl from plan, test fixtures, validation steps, constraints). After each implementer report I diff-reviewed, ran the relevant test slice, and committed. Zero rollbacks; three implementer reports flagged subtle issues (Task 2 — pre-existing `config.py` collision converted to package; Task 4 — SQLite cannot ALTER TABLE ADD CHECK so init_db + migration intentionally agree on permissive schemas; Task 6 — `calibration_version` kwarg threaded but path-derived persisted value left as-is for minimal diff). All three notes ended up in commit messages so future readers see why.
+
+Final tally:
+- 11 commits over ~2 hours of execution
+- Suite 241 → **277 tests** (+36, all green)
+- ~600 LOC implementation, ~800 LOC tests
+- Zero pre-existing tests broken (only `test_validate_pending_sends_telegram_on_close` needed a `_LIVE_CONFIG` mock added because the safe-default shadow config now changes the digest header)
+
+**Operational task 12** applied to live system:
+- `scripts/backup_databases.py` ran ad-hoc → `~/.crypto-predictor-backups/predictions-2026-06-03-1800.db` (228 KB)
+- `scripts/migrate_v021_mode.py` ran on live `predictions.db` → 3 columns added, 353-row backfill marked `feature_completeness='degraded' missing_features='sentiment,global'`, 2 dryrun rows preserved `'full'`
+- `data/scheduler_config.yaml` created from `.example` with `mode: shadow, calibration_version: 1_5_4` (committed → audit trail starts now)
+
+Final verification on the live DB:
+```
+mode=live  completeness=degraded  missing=sentiment,global  n=353
+mode=live  completeness=full      missing=NULL              n=2
+indexes:  idx_predictions_mode, idx_predictions_completeness
+```
+
+**What the user does next** (manual, irreversible-ish so left out of autonomous scope):
+```
+.\.venv\Scripts\python.exe scripts\run_scheduler.py
+```
+Starts the foreground scheduler process. From the moment it's alive:
+- 06:00 UTC daily: Telegram receives `🔬 06:00 scan start — N sym, detecting, mode=shadow, cal=1_5_4`
+- 06:00 UTC daily: scan persists ~340 predictions with `mode='shadow'`, `feature_completeness='full'` (since sentiment + global caches now populate correctly)
+- `reports/predict-YYYY-MM-DD-HHMM.md` written with `🔬 Crypto Predictor — SHADOW Daily Report` H1
+- 06:15 UTC daily: incremental ingest pulls fresh OHLCV
+- 06:30 UTC daily: validate_pending closes any 24h-mature cohorts (none in first 24h after start; once cohorts mature, Telegram receives `🔬 Shadow validation` digest)
+- 06:45 UTC daily: backup
+- All Telegram messages are `🔬`-prefixed; no live alert until user manually flips `mode: live` in the yaml
+
+**What this earns us**: ~14 days of unbroken shadow data, then v0.3 calibration revision (plan B in `docs/superpowers/plans/2026-06-03-v0.3-calibration-revision.md`) is ready to fit on it. The dormant plan covers beta-binomial smoothing, linear tail extrapolation, per-completeness calibration, data-driven tilt re-fit, ship-criteria check (62.5% headline + ≤10pp per-bucket), and 3-of-7 auto-rollback. All wired through the same `data/scheduler_config.yaml`.
+
+**v0.2.1 status**: SHIPPED. Awaiting user-initiated scheduler start.
+
 ---
 
 *End of session journal. 2026-06-03.*
