@@ -23,6 +23,7 @@ from crypto_predictor.orchestrator.universe import (
 from crypto_predictor.output.post_validation import (
     format_validation_telegram,
     lookback_window,
+    should_auto_rollback,
     summarize_recent_closures,
 )
 from crypto_predictor.output.telegram_delivery import send_message
@@ -266,6 +267,45 @@ def _job_predict_scan() -> None:
              n_predictions=result["scan"]["n_predictions"])
 
 
+def _query_daily_hit_rates(db_path: Path, *,
+                            window_days: int = 7) -> list[float]:
+    """Return list of per-day hit rates over the last `window_days` of closed
+    predictions (mode='live' only). One float per day with closed predictions."""
+    import sqlite3
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT date(validated_at) AS d, "
+            "       SUM(CASE WHEN status='correct' THEN 1 ELSE 0 END) AS hits, "
+            "       COUNT(*) AS n "
+            "FROM predictions "
+            "WHERE status IN ('correct','incorrect') AND mode='live' "
+            "  AND validated_at >= datetime('now', 'utc', ?) "
+            "GROUP BY date(validated_at) "
+            "ORDER BY d",
+            (f"-{window_days} days",),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [hits / n for _d, hits, n in rows if n > 0]
+
+
+def _flip_config_to_shadow(config_path: Path) -> None:
+    """Edit scheduler_config.yaml in-place, flipping mode: live -> mode: shadow.
+
+    NOTE: yaml.safe_dump strips comments. The audit trail is in git diff; the
+    spec accepts this trade-off (§v0.3 §10).
+    """
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    data["mode"] = "shadow"
+    config_path.write_text(
+        yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def _job_validate_pending() -> None:
     """Close pending predictions whose horizon has elapsed. Telegrams on close."""
     project_root = Path(os.environ.get(
@@ -310,6 +350,29 @@ def _job_validate_pending() -> None:
     msg = format_validation_telegram(summary, mode=config.mode)
     if msg:
         send_message(bot_token=token, chat_id=chat, text=msg)
+
+    # === v0.3 post-ship circuit breaker (Task 8) ===
+    # If 3+ of the last 7 daily hit rates fell under 50%, auto-rollback
+    # mode: live -> mode: shadow and alert. Only runs in live mode (shadow
+    # is already shadow). This is the LAST defensive layer downstream of the
+    # ship_criteria_check upstream gate.
+    if config.mode == "live":
+        daily_rates = _query_daily_hit_rates(
+            project_root / "predictions.db", window_days=7,
+        )
+        if should_auto_rollback(daily_rates):
+            _flip_config_to_shadow(
+                project_root / "data" / "scheduler_config.yaml"
+            )
+            log.warning("v03_auto_rollback_triggered",
+                        daily_hit_rates=daily_rates)
+            if token and chat:
+                send_message(
+                    bot_token=token, chat_id=chat,
+                    text=("⚠️ *v0.3 AUTO-ROLLBACK* — 3/7 days "
+                          "under 50%, reverted to shadow mode. Review and "
+                          "adjust before re-promotion."),
+                )
 
 
 def _job_weekly_metrics() -> None:

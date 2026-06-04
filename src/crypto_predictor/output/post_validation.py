@@ -147,3 +147,20 @@ def format_validation_telegram(summary: dict, *,
 
 def lookback_window(now: datetime, hours: int = 24) -> datetime:
     return now - timedelta(hours=hours)
+
+
+def should_auto_rollback(daily_hit_rates: list[float], *,
+                          window: int = 7, threshold: float = 0.50,
+                          n_bad_required: int = 3) -> bool:
+    """True if at least n_bad_required of the last `window` daily hit rates
+    fall below `threshold`.
+
+    Used as the post-ship circuit breaker for v0.3: validate job calls this
+    after every closure cycle when mode='live'; if True, scheduler_config.yaml
+    auto-flips back to mode='shadow' and a Telegram alert is pushed.
+    """
+    if len(daily_hit_rates) < window:
+        return False
+    recent = daily_hit_rates[-window:]
+    n_bad = sum(1 for h in recent if h < threshold)
+    return n_bad >= n_bad_required
