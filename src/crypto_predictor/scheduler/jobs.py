@@ -92,6 +92,13 @@ def _job_predict_scan() -> None:
     if mcap_ranks_path.exists():
         mcap_map = yaml.safe_load(mcap_ranks_path.read_text(encoding="utf-8")) or {}
     else:
+        # Without this file every symbol's rank is None, which silently
+        # collapses the top-30 NewsAPI sentiment loop to zero iterations
+        # (cohort then comes back feature_completeness='degraded'). Generate
+        # via scripts/generate_mcap_ranks.py.
+        log.warning("mcap_ranks_missing",
+                    path=str(mcap_ranks_path),
+                    hint="run scripts/generate_mcap_ranks.py")
         mcap_map = {}
     mcap_ranks = assign_mcap_ranks(symbols, mcap_map)
 

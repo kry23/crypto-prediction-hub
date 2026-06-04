@@ -58,14 +58,30 @@ def _narrate_slate(slate: RankedSlate, *, fetcher: FeatureFetcher,
         )
 
 
-def _load_predictions(db: Path, asof: datetime) -> list[dict]:
+def _load_predictions(db: Path, asof: datetime,
+                      tolerance_seconds: int = 60) -> list[dict]:
+    """Load predictions inserted near `asof` (range query, not exact match).
+
+    Previously did `WHERE created_at = asof.isoformat()`. If any caller ever
+    re-derived `asof` between the write and the read (e.g., two separate
+    `datetime.now()` calls in jobs.py), the lookup silently returned zero
+    rows. The asof consolidation in `_job_predict_scan` removed the current
+    drift but the brittle exact-match is a future-proofing hazard.
+
+    A ±60s window covers the scan-write-then-load handoff (~ms) while still
+    excluding any other cohort persisted on a different cron firing.
+    """
+    from datetime import timedelta
+    lo = (asof - timedelta(seconds=tolerance_seconds)).isoformat()
+    hi = (asof + timedelta(seconds=tolerance_seconds)).isoformat()
     conn = sqlite3.connect(str(db))
     try:
         rows = conn.execute(
             "SELECT id, symbol, prediction, p_direction, target_value, "
             "       composite_score, confidence_flag, regime "
-            "FROM predictions WHERE created_at = ?",
-            (asof.isoformat(),),
+            "FROM predictions "
+            "WHERE created_at >= ? AND created_at <= ?",
+            (lo, hi),
         ).fetchall()
     finally:
         conn.close()
