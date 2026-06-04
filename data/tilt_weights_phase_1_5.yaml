@@ -1,0 +1,39 @@
+# Phase 1.5 tilt weights (data-driven from backtest correlation analysis).
+# Source of truth: src/crypto_predictor/scoring/direction.py
+#   DEFAULT_REGIME_WEIGHTS (magnitudes) + MOMENTUM_FLIP_BY_REGIME (signs).
+#
+# Materialized as a YAML reference so refit_tilt_weights_v03.py can compare
+# the new v0.3 weights against this baseline and audit sign changes.
+#
+# Notes:
+# - sentiment + global tilts are 0.0 here because the backtest ran with both
+#   feature caches empty. v0.3 will fit non-zero values from shadow data
+#   where the caches are populated.
+# - CHOP momentum carries the explicit -1 sign-flip from MOMENTUM_FLIP_BY_REGIME
+#   (mean-reversion behavior). If v0.3 shadow data shows a positive correlation,
+#   refit_tilt_weights_v03.detect_sign_changes will flag it.
+
+fit_window: "2026-03-27..2026-05-26 backtest, Phase 1.5 diagnostic sprint"
+
+weights:
+  BULL:
+    momentum: 0.35
+    perp: 0.05
+    volume: 0.05
+    technical: 0.15
+    sentiment: 0.0
+    global: 0.0
+  CHOP:
+    momentum: -0.20    # MOMENTUM_FLIP_BY_REGIME["CHOP"] = -1 applied
+    perp: 0.05
+    volume: 0.05
+    technical: 0.50
+    sentiment: 0.0
+    global: 0.0
+  BEAR:
+    momentum: 0.10     # unmeasured in backtest; leaned conservative
+    perp: 0.10
+    volume: 0.05
+    technical: 0.50
+    sentiment: 0.0
+    global: 0.0
