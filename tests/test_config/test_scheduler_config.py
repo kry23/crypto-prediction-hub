@@ -48,3 +48,45 @@ def test_malformed_yaml_raises(tmp_path: Path):
     path.write_text("mode: shadow\n  invalid indent\n", encoding="utf-8")
     with pytest.raises(Exception):
         load_scheduler_config(path)
+
+
+def test_shadow_skip_telegram_quoted_false_is_false(tmp_path: Path):
+    """Without strict parsing bool('false') == True. Strict parser must
+    treat the string 'false' as Python False (catches the silent silence
+    of a user writing `shadow_skip_telegram: 'false'` instead of `false`)."""
+    path = tmp_path / "scheduler_config.yaml"
+    path.write_text(
+        "mode: shadow\n"
+        "calibration_version: '1_5_4'\n"
+        "tilt_weights_version: 'phase_1_5'\n"
+        "shadow_skip_telegram: 'false'\n",
+        encoding="utf-8",
+    )
+    config = load_scheduler_config(path)
+    assert config.shadow_skip_telegram is False
+
+
+def test_shadow_skip_telegram_quoted_yes_is_true(tmp_path: Path):
+    path = tmp_path / "scheduler_config.yaml"
+    path.write_text(
+        "mode: shadow\n"
+        "calibration_version: '1_5_4'\n"
+        "tilt_weights_version: 'phase_1_5'\n"
+        "shadow_skip_telegram: 'yes'\n",
+        encoding="utf-8",
+    )
+    config = load_scheduler_config(path)
+    assert config.shadow_skip_telegram is True
+
+
+def test_shadow_skip_telegram_garbage_raises(tmp_path: Path):
+    path = tmp_path / "scheduler_config.yaml"
+    path.write_text(
+        "mode: shadow\n"
+        "calibration_version: '1_5_4'\n"
+        "tilt_weights_version: 'phase_1_5'\n"
+        "shadow_skip_telegram: maybe\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="shadow_skip_telegram"):
+        load_scheduler_config(path)

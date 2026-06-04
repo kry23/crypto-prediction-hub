@@ -115,39 +115,44 @@ def _job_predict_scan() -> None:
     )
     import httpx as _httpx
 
-    asof_iso = datetime.now(timezone.utc).isoformat()
+    # Single asof for the WHOLE job — sentiment cache row, global cache row,
+    # run_full_scan persistence, _load_predictions lookup, markdown header.
+    # Previously three separate datetime.now() calls could drift seconds apart
+    # and risked desyncing the run.py _load_predictions exact-match lookup.
+    asof = datetime.now(timezone.utc)
+    asof_iso = asof.isoformat()
     newsapi_key = (load_secrets(project_root / "data" / "secrets.env")
                    .get("NEWSAPI_API_KEY", ""))
     if newsapi_key:
-        http = _httpx.Client(timeout=20.0)
-        # Top 30 mcap coins by rank
-        top_symbols = sorted(
-            [(s, r) for s, r in mcap_ranks.items() if r is not None],
-            key=lambda x: x[1],
-        )[:30]
-        for sym, _rank in top_symbols:
-            base = sym.split("/")[0].lower()
-            try:
-                articles = fetch_articles_for_coin(
-                    http_client=http, api_key=newsapi_key,
-                    coin=base, hours_back=24,
-                )
-                score = sentiment_from_articles(articles)
-                write_sentiment_for_symbol(
-                    db=sentiment_cache, symbol=sym, timestamp=asof_iso,
-                    news_sent_24h=score, social_sent_24h=0.0,
-                    sent_velocity=0.0, news_volume_z=float(len(articles)),
-                )
-            except Exception as exc:
-                log.warning("sentiment_fetch_failed",
-                            symbol=sym, error=str(exc))
-        http.close()
+        # `with` block ensures the client closes even if a symbol fetch raises
+        # an exception that escapes the per-symbol try/except (defensive).
+        with _httpx.Client(timeout=20.0) as http:
+            # Top 30 mcap coins by rank
+            top_symbols = sorted(
+                [(s, r) for s, r in mcap_ranks.items() if r is not None],
+                key=lambda x: x[1],
+            )[:30]
+            for sym, _rank in top_symbols:
+                base = sym.split("/")[0].lower()
+                try:
+                    articles = fetch_articles_for_coin(
+                        http_client=http, api_key=newsapi_key,
+                        coin=base, hours_back=24,
+                    )
+                    score = sentiment_from_articles(articles)
+                    write_sentiment_for_symbol(
+                        db=sentiment_cache, symbol=sym, timestamp=asof_iso,
+                        news_sent_24h=score, social_sent_24h=0.0,
+                        sent_velocity=0.0, news_volume_z=float(len(articles)),
+                    )
+                except Exception as exc:
+                    log.warning("sentiment_fetch_failed",
+                                symbol=sym, error=str(exc))
 
     # Global context (BTC + ETH dom; 7d trends from cached history)
     try:
-        gh = _httpx.Client(timeout=20.0)
-        dom = fetch_dominance_snapshot(http_client=gh)
-        gh.close()
+        with _httpx.Client(timeout=20.0) as gh:
+            dom = fetch_dominance_snapshot(http_client=gh)
         btc_dom = dom["btc"]
         eth_dom = dom["eth"]
         btc_dom_trend_7d = compute_trend_pct(
@@ -176,7 +181,7 @@ def _job_predict_scan() -> None:
         calibration_path=calibration_path,
         symbols=symbols,
         mcap_ranks=mcap_ranks,
-        asof=datetime.now(timezone.utc),
+        asof=asof,
         formula_version="v1.5",
         llm_client=llm_client,
         mode=config.mode,
@@ -198,7 +203,10 @@ def _job_predict_scan() -> None:
     )
 
     slate = result.get("slate")
-    asof = datetime.now(timezone.utc)
+    # asof reused from top of function — see comment above. Output delivery
+    # (markdown header timestamp, telegram digest "asof" line) MUST match what
+    # got persisted to predictions.created_at, otherwise the daily report
+    # references a different snapshot than the rows the validator will close.
 
     # Markdown report
     from crypto_predictor.calibration.persistence import ceilings_from_calibration
@@ -325,10 +333,13 @@ def _job_recalibrate() -> None:
         return
     conn = sqlite3.connect(str(db))
     try:
+        # validated_at is stored as ISO with +00:00 UTC offset; comparing it
+        # against datetime('now', ...) (server local time) silently gives the
+        # wrong window on non-UTC hosts. Always pass an explicit UTC anchor.
         rows = conn.execute(
             "SELECT p_direction, status FROM predictions "
             "WHERE status IN ('correct','incorrect') "
-            "AND validated_at >= datetime('now', '-7 days')"
+            "AND validated_at >= datetime('now', 'utc', '-7 days')"
         ).fetchall()
     finally:
         conn.close()
