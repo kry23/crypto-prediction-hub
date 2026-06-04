@@ -332,3 +332,287 @@ def todays_slate(conn, *, mode: str = "shadow") -> dict:
         "active_annotations": active_annotations,
         "next_scan_dt": _compute_next_scan(now),
     }
+
+
+# --- Track Record helpers --------------------------------------------------
+#
+# These power the Track Record page (Task 5). All four return plain dicts
+# / lists so they can be pandas-DataFrame-ified in the page layer without
+# any DB coupling. The shapes mirror `scripts/ship_criteria_check.py` so
+# the page can render the same numbers the ship-criteria check produces.
+
+# Bucket boundaries match `scripts/ship_criteria_check.BUCKETS`.
+_CALIBRATION_BUCKETS = [
+    (0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70),
+    (0.70, 0.75), (0.75, 0.80), (0.80, 0.95),
+]
+
+
+def rolling_kpis(conn, *, window_days: int = 7,
+                 mode: str = "shadow") -> dict:
+    """Return aggregate KPIs over the last ``window_days`` of predictions
+    for the given mode.
+
+    Returns dict with keys:
+        n_total, n_pending, n_correct, n_incorrect, n_expired,
+        n_closed, hit_rate (float in [0,1]), brier (float).
+
+    When no closed predictions are in-window, hit_rate and brier are 0.0.
+    Brier is computed in Python as ``mean((p_direction - y)^2)`` where
+    y=1 for correct, y=0 for incorrect.
+    """
+    with conn.cursor() as cur:
+        # Pull (status, p_direction) for closed rows to compute Brier+hit-rate.
+        cur.execute(
+            """
+            SELECT status, p_direction
+            FROM predictions
+            WHERE mode = %s
+              AND status IN ('correct','incorrect')
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        closed_rows = cur.fetchall()
+
+        # Counts by status (over the same window).
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM predictions
+            WHERE mode = %s
+              AND created_at >= (now() AT TIME ZONE 'UTC')
+                                  - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        row = cur.fetchone()
+        n_total = int(row[0]) if row and row[0] is not None else 0
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM predictions
+            WHERE mode = %s
+              AND status = 'pending'
+              AND created_at >= (now() AT TIME ZONE 'UTC')
+                                  - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        row = cur.fetchone()
+        n_pending = int(row[0]) if row and row[0] is not None else 0
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM predictions
+            WHERE mode = %s
+              AND status = 'correct'
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        row = cur.fetchone()
+        n_correct = int(row[0]) if row and row[0] is not None else 0
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM predictions
+            WHERE mode = %s
+              AND status = 'incorrect'
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        row = cur.fetchone()
+        n_incorrect = int(row[0]) if row and row[0] is not None else 0
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM predictions
+            WHERE mode = %s
+              AND status = 'expired'
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        row = cur.fetchone()
+        n_expired = int(row[0]) if row and row[0] is not None else 0
+
+    n_closed = len(closed_rows)
+    if n_closed == 0:
+        hit_rate = 0.0
+        brier = 0.0
+    else:
+        correct = sum(1 for status, _ in closed_rows if status == "correct")
+        hit_rate = correct / n_closed
+        squared_errors = []
+        for status, p_dir in closed_rows:
+            try:
+                p = float(p_dir)
+            except (TypeError, ValueError):
+                continue
+            y = 1.0 if status == "correct" else 0.0
+            squared_errors.append((p - y) ** 2)
+        brier = (sum(squared_errors) / len(squared_errors)
+                 if squared_errors else 0.0)
+
+    return {
+        "n_total": n_total,
+        "n_pending": n_pending,
+        "n_correct": n_correct,
+        "n_incorrect": n_incorrect,
+        "n_expired": n_expired,
+        "n_closed": n_closed,
+        "hit_rate": hit_rate,
+        "brier": brier,
+    }
+
+
+def per_bucket_calibration(conn, *, window_days: int = 7,
+                           mode: str = "shadow",
+                           min_samples_per_bucket: int = 20) -> list[dict]:
+    """Per-p-bucket realized-vs-expected stats over the rolling window.
+
+    Mirrors `scripts/ship_criteria_check.check_bucket_bar` so the page
+    shows the same numbers as the CLI check. Returns a list of dicts
+    with keys: lo, hi, n, realized, expected, delta_pp, soft_pass.
+
+    Sparse buckets (``n < min_samples_per_bucket``) are returned with
+    ``soft_pass=True`` and ``delta_pp=0.0``. Empty buckets are omitted.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, p_direction
+            FROM predictions
+            WHERE mode = %s
+              AND status IN ('correct','incorrect')
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            """,
+            (mode, window_days),
+        )
+        rows = cur.fetchall()
+
+    # Pre-cast to (status, float p) once.
+    closed: list[tuple[str, float]] = []
+    for status, p_dir in rows:
+        try:
+            closed.append((status, float(p_dir)))
+        except (TypeError, ValueError):
+            continue
+
+    out: list[dict] = []
+    for lo, hi in _CALIBRATION_BUCKETS:
+        sub = [(s, p) for (s, p) in closed if lo <= p < hi]
+        n = len(sub)
+        if n == 0:
+            continue
+        realized = sum(1 for s, _ in sub if s == "correct") / n
+        expected = sum(p for _, p in sub) / n
+        if n < min_samples_per_bucket:
+            out.append({
+                "lo": lo, "hi": hi, "n": n,
+                "realized": float(realized),
+                "expected": float(expected),
+                "delta_pp": 0.0,
+                "soft_pass": True,
+            })
+            continue
+        delta_pp = abs(realized - expected) * 100
+        out.append({
+            "lo": lo, "hi": hi, "n": n,
+            "realized": float(realized),
+            "expected": float(expected),
+            "delta_pp": float(delta_pp),
+            "soft_pass": False,
+        })
+    return out
+
+
+def daily_hit_rates(conn, *, window_days: int = 14,
+                    mode: str = "shadow") -> list[dict]:
+    """Per-day hit-rate trend over the last ``window_days``.
+
+    Returns a list of dicts: ``{date: 'YYYY-MM-DD', n: int, hit_rate: float}``,
+    ordered oldest -> newest. Days with no closures are omitted (the page
+    layer renders gaps as gaps).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT date(validated_at) AS day,
+                   SUM(CASE WHEN status = 'correct' THEN 1 ELSE 0 END) AS hits,
+                   COUNT(*) AS n
+            FROM predictions
+            WHERE mode = %s
+              AND status IN ('correct','incorrect')
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            GROUP BY date(validated_at)
+            ORDER BY date(validated_at)
+            """,
+            (mode, window_days),
+        )
+        rows = cur.fetchall()
+
+    out: list[dict] = []
+    for day, hits, n in rows:
+        if hasattr(day, "isoformat"):
+            day_str = day.isoformat()
+        else:
+            day_str = str(day)
+        n_int = int(n) if n is not None else 0
+        hits_int = int(hits) if hits is not None else 0
+        hit_rate = hits_int / n_int if n_int else 0.0
+        out.append({"date": day_str, "n": n_int, "hit_rate": hit_rate})
+    return out
+
+
+def by_regime_and_flag(conn, *, window_days: int = 7,
+                       mode: str = "shadow") -> list[dict]:
+    """Breakdown of closed predictions by ``(regime, confidence_flag)``.
+
+    Returns a list of dicts with keys: regime, flag, n, correct, hit_rate.
+    Sorted by n descending so the busiest cells render first.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT regime,
+                   confidence_flag,
+                   COUNT(*) AS n,
+                   SUM(CASE WHEN status = 'correct' THEN 1 ELSE 0 END) AS correct
+            FROM predictions
+            WHERE mode = %s
+              AND status IN ('correct','incorrect')
+              AND validated_at >= (now() AT TIME ZONE 'UTC')
+                                   - make_interval(days => %s)
+            GROUP BY regime, confidence_flag
+            ORDER BY COUNT(*) DESC
+            """,
+            (mode, window_days),
+        )
+        rows = cur.fetchall()
+
+    out: list[dict] = []
+    for regime, flag, n, correct in rows:
+        n_int = int(n) if n is not None else 0
+        correct_int = int(correct) if correct is not None else 0
+        hit_rate = correct_int / n_int if n_int else 0.0
+        out.append({
+            "regime": regime,
+            "flag": flag,
+            "n": n_int,
+            "correct": correct_int,
+            "hit_rate": hit_rate,
+        })
+    return out
