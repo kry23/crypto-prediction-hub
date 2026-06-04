@@ -122,6 +122,7 @@ def run_full_scan(*, history_root: Path,
         mode=mode,
         feature_completeness=completeness,
         missing_features=missing_features,
+        calibration_version=calibration_version,
     )
 
     rows = _load_predictions(predictions_db, asof)

@@ -402,22 +402,35 @@ def _job_backup_databases() -> None:
 def build_scheduler() -> BackgroundScheduler:
     """Build scheduler with all four Phase-1 jobs registered (no-ops until later plans)."""
     sched = BackgroundScheduler(timezone="UTC")
+    # misfire_grace_time=3600: tolerate up to 1h of clock skew / job overrun before
+    #   dropping a missed cron. Default is 1s which silently lost predict_scan on
+    #   the 2026-06-04 launch when APScheduler woke up 3.88s late.
+    # coalesce=True: if multiple firings backed up (e.g., scheduler paused), run
+    #   only the most recent one rather than blasting them in sequence.
+    # CronTrigger(..., timezone="UTC") explicit to remove any ambiguity about
+    #   inheriting the scheduler-level timezone (some APScheduler versions /
+    #   Windows hosts default to local tz on the CronTrigger itself).
+    common = {"replace_existing": True, "misfire_grace_time": 3600,
+              "coalesce": True}
     sched.add_job(_job_predict_scan,
-                  CronTrigger(hour=6, minute=0), id="predict_scan", replace_existing=True)
+                  CronTrigger(hour=6, minute=0, timezone="UTC"),
+                  id="predict_scan", **common)
     sched.add_job(_job_incremental_ingest,
-                  CronTrigger(hour=6, minute=15), id="incremental_ingest",
-                  replace_existing=True)
+                  CronTrigger(hour=6, minute=15, timezone="UTC"),
+                  id="incremental_ingest", **common)
     sched.add_job(_job_validate_pending,
-                  CronTrigger(hour=6, minute=30), id="validate_pending", replace_existing=True)
+                  CronTrigger(hour=6, minute=30, timezone="UTC"),
+                  id="validate_pending", **common)
     sched.add_job(_job_backup_databases,
-                  CronTrigger(hour=6, minute=45), id="backup_databases",
-                  replace_existing=True)
+                  CronTrigger(hour=6, minute=45, timezone="UTC"),
+                  id="backup_databases", **common)
     sched.add_job(_job_weekly_metrics,
-                  CronTrigger(day_of_week="sun", hour=7, minute=0), id="weekly_metrics",
-                  replace_existing=True)
+                  CronTrigger(day_of_week="sun", hour=7, minute=0,
+                              timezone="UTC"),
+                  id="weekly_metrics", **common)
     sched.add_job(_job_recalibrate,
-                  CronTrigger(day=1, hour=7, minute=0), id="recalibrate",
-                  replace_existing=True)
+                  CronTrigger(day=1, hour=7, minute=0, timezone="UTC"),
+                  id="recalibrate", **common)
     sched.start(paused=True)
     return sched
 

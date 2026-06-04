@@ -84,17 +84,24 @@ def run_daily_scan(*, history_root: Path,
                    horizon_hours: int = 24,
                    mode: str = "live",
                    feature_completeness: str = "full",
-                   missing_features: str | None = None) -> dict:
+                   missing_features: str | None = None,
+                   calibration_version: str | None = None) -> dict:
     """Run the daily scan: predict for every symbol, persist to predictions.db.
 
     v0.2.1: ``mode`` / ``feature_completeness`` / ``missing_features`` are
     written alongside each row so shadow-mode runs are distinguishable from
-    live ones. Defaults preserve pre-v0.2.1 behaviour.
+    live ones. ``calibration_version`` (also v0.2.1) is what gets persisted
+    to the predictions row; if the caller doesn't pass it, fall back to the
+    path stem (legacy behaviour).
+    Defaults preserve pre-v0.2.1 behaviour.
     """
     log.info("daily_scan_start", asof=asof.isoformat(), n_symbols=len(symbols))
 
     calibs = load_calibration(calibration_path) if calibration_path else RegimeCalibrators()
-    calibration_version = calibration_path.stem if calibration_path else "uncalibrated"
+    if calibration_version is None:
+        calibration_version = (
+            calibration_path.stem if calibration_path else "uncalibrated"
+        )
 
     fetcher = FeatureFetcher(root=history_root, asof=asof)
     regime = detect_regime(fetcher, global_mcap_trend=global_mcap_trend)
