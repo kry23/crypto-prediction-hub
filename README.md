@@ -111,9 +111,26 @@ uv pip install -e ".[dev]"
 
 > **Important**: the scheduled cron jobs (06:00 predict scan, 06:15 ingest, 06:30
 > validate, 06:45 backup, weekly metrics, monthly recalibrate) fire only while
-> `run_scheduler.py` is alive. For unattended operation, wire it under Windows Task
-> Scheduler ("At log on" trigger) or `nssm`. Without a runner, all daily cadence
-> must be triggered manually via the CLIs above.
+> `run_scheduler.py` is alive. Without a supervisor the process dies on
+> session end / laptop sleep and the next morning's cohort is lost.
+
+### Persistent operation (Windows)
+
+```powershell
+# Register a Windows Scheduled Task that starts the scheduler at every user
+# logon and restarts it on crash. Logs append to logs\scheduler_persistent.log.
+pwsh -File scripts\install_windows_scheduler.ps1
+
+# Optional: start immediately without waiting for the next logon
+Start-ScheduledTask -TaskName CryptoPredictorScheduler
+
+# Inspect state
+Get-ScheduledTask -TaskName CryptoPredictorScheduler | Get-ScheduledTaskInfo
+
+# Stop / remove
+Stop-ScheduledTask -TaskName CryptoPredictorScheduler
+pwsh -File scripts\uninstall_windows_scheduler.ps1
+```
 
 ## Scheduler config
 
