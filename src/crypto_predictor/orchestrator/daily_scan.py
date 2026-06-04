@@ -11,7 +11,12 @@ import structlog
 from crypto_predictor.calibration.isotonic import (
     RegimeCalibrators, predict_probability,
 )
-from crypto_predictor.calibration.persistence import load_calibration
+from crypto_predictor.calibration.per_completeness import (
+    load_per_completeness, lookup_calibrated_probability,
+)
+from crypto_predictor.calibration.persistence import (
+    detect_calibration_format, load_calibration,
+)
 from crypto_predictor.features.compute import compute_features
 from crypto_predictor.features.fetcher import FeatureFetcher
 from crypto_predictor.scoring.anomaly import is_anomalous
@@ -97,7 +102,29 @@ def run_daily_scan(*, history_root: Path,
     """
     log.info("daily_scan_start", asof=asof.isoformat(), n_symbols=len(symbols))
 
-    calibs = load_calibration(calibration_path) if calibration_path else RegimeCalibrators()
+    # Detect calibration format once and pre-load the appropriate object.
+    # v0.3 per-completeness JSON ('by_completeness' key) -> use
+    # lookup_calibrated_probability with the scan's feature_completeness.
+    # Legacy v1.5 / Plan B JSON ('regimes' key) -> use predict_probability.
+    # Missing/unparseable -> uncalibrated 0.5 fallback (preserves prior
+    # behaviour when calibration_path was None).
+    calibration_format = (
+        detect_calibration_format(calibration_path)
+        if calibration_path else "missing"
+    )
+    per_completeness_cal = None
+    calibs: RegimeCalibrators = RegimeCalibrators()
+    if calibration_format == "per_completeness":
+        per_completeness_cal = load_per_completeness(calibration_path)
+        if per_completeness_cal is None:
+            calibration_format = "missing"
+    elif calibration_format == "legacy":
+        calibs = load_calibration(calibration_path)
+    log.info(
+        "calibration_loaded",
+        format=calibration_format,
+        feature_completeness=feature_completeness,
+    )
     if calibration_version is None:
         calibration_version = (
             calibration_path.stem if calibration_path else "uncalibrated"
@@ -125,7 +152,22 @@ def run_daily_scan(*, history_root: Path,
                 continue
 
             raw = compute_direction_raw_for_regime(feats, regime)
-            p_up = predict_probability(calibs, raw_score=raw, regime=regime)
+            if calibration_format == "per_completeness" and per_completeness_cal is not None:
+                try:
+                    p_up = lookup_calibrated_probability(
+                        per_completeness_cal,
+                        completeness=feature_completeness,
+                        regime=regime,
+                        direction_raw=raw,
+                    )
+                except KeyError:
+                    # No fit for this (completeness, regime) and no 'full'
+                    # fallback for this regime — fall back to uncalibrated.
+                    p_up = 0.5
+            elif calibration_format == "legacy":
+                p_up = predict_probability(calibs, raw_score=raw, regime=regime)
+            else:
+                p_up = 0.5
             # Direction sign comes from CALIBRATED probability, not raw.
             # This guarantees sign(expected_ret) == sign(p_up - 0.5),
             # so prediction == "up" iff target_value > 0.

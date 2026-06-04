@@ -1,6 +1,8 @@
 """Direction-raw scoring: weighted sum of 6 tilt functions."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from crypto_predictor.scoring.tilt import (
     tilt_global, tilt_momentum, tilt_perp, tilt_sentiment,
     tilt_technical, tilt_volume,
@@ -101,3 +103,65 @@ def compute_direction_raw(feats: dict, *,
         w["global"]     * tilt_global(feats) * global_attenuation
     )
     return max(-1.0, min(1.0, raw))
+
+
+def calibrate_direction(
+    *,
+    calibration_path: Path | None,
+    direction_raw: float,
+    regime: str,
+    feature_completeness: str = "full",
+) -> float:
+    """Map ``direction_raw`` to a calibrated P(up) for the given regime.
+
+    Detects the calibration JSON format on disk and dispatches:
+
+    * ``per_completeness`` (v0.3): uses
+      :func:`crypto_predictor.calibration.per_completeness.lookup_calibrated_probability`
+      with the supplied ``feature_completeness`` (falls back to ``"full"``
+      internally if the bucket is empty for the regime).
+    * ``legacy`` (Plan B / v1.5): uses
+      :func:`crypto_predictor.calibration.isotonic.predict_probability`.
+    * ``missing`` (no file, or unparseable, or unrecognised schema):
+      returns 0.5 — uncalibrated 50/50.
+
+    A ``None`` path is treated as missing. This keeps shadow runs and
+    older deployments working unchanged while activating the v0.3 lookup
+    the moment ``data/calibration_0_3_0.json`` lands on disk.
+    """
+    # Lazy imports so the scoring module stays cheap to import at startup
+    # and doesn't drag sklearn in for callers that only need tilts.
+    from crypto_predictor.calibration.isotonic import (
+        predict_probability,
+    )
+    from crypto_predictor.calibration.per_completeness import (
+        load_per_completeness, lookup_calibrated_probability,
+    )
+    from crypto_predictor.calibration.persistence import (
+        detect_calibration_format, load_calibration,
+    )
+
+    if calibration_path is None:
+        return 0.5
+
+    fmt = detect_calibration_format(calibration_path)
+    if fmt == "per_completeness":
+        cal = load_per_completeness(calibration_path)
+        if cal is None:
+            return 0.5
+        try:
+            return lookup_calibrated_probability(
+                cal,
+                completeness=feature_completeness,
+                regime=regime,
+                direction_raw=direction_raw,
+            )
+        except KeyError:
+            # No fit for this (completeness, regime) AND no fallback in 'full'.
+            return 0.5
+    if fmt == "legacy":
+        calibs = load_calibration(calibration_path)
+        return predict_probability(
+            calibs, raw_score=direction_raw, regime=regime,
+        )
+    return 0.5

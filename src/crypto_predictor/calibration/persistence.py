@@ -39,6 +39,30 @@ def load_calibration(path: Path) -> RegimeCalibrators:
     return calibs
 
 
+def detect_calibration_format(path: Path) -> str:
+    """Inspect a calibration JSON and report which schema it uses.
+
+    Returns:
+        ``"per_completeness"`` — v0.3 schema with ``by_completeness`` key.
+        ``"legacy"``           — Plan B / v1.5 schema with ``regimes`` key.
+        ``"missing"``          — file absent or unparseable.
+
+    Pure read; no object construction. Used by the runtime to dispatch
+    between :func:`load_per_completeness` and :func:`load_calibration`.
+    """
+    if not path.exists():
+        return "missing"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "missing"
+    if "by_completeness" in raw:
+        return "per_completeness"
+    if "regimes" in raw:
+        return "legacy"
+    return "missing"
+
+
 def ceilings_from_calibration(path: Path) -> dict[str, float]:
     """Return {regime: max(y)} for each regime in the calibration JSON.
 
