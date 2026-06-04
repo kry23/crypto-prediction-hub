@@ -1,0 +1,211 @@
+# Full Session Journal — 2026-06-04 + 2026-06-05
+
+Continues from `2026-06-03-full-session-journal.md` which ended at §19.12 (v0.2.1 shadow infrastructure shipped). This file covers two calendar days of work: persistent operation, a 10-bug audit + fix round, v0.3 calibration revision implementation (Tasks 1–10), and the v1.0 web UI + cloud migration brainstorm + spec.
+
+---
+
+## §20 Persistent operation — Windows Task Scheduler installer (2026-06-04, commit `36b2029`)
+
+Day after the v0.2.1 ship, discovered the manually-started scheduler process was gone (session ended, OS killed it). The runbook said "wire under Windows Task Scheduler 'At log on'" but we never did. Wrote and ran:
+
+- `scripts/install_windows_scheduler.ps1` — registers `CryptoPredictorScheduler` at user logon, runs the Python scheduler under PowerShell with hidden window, appends stdout/stderr to `logs/scheduler_persistent.log`. Restart on crash: 99 retries, 5-min interval.
+- `scripts/uninstall_windows_scheduler.ps1` — removes the task + kills leftover processes.
+- README "Persistent operation (Windows)" subsection with the four maintenance commands (start/inspect/stop/uninstall).
+
+Verified live: task started, two python.exe processes (powershell wrapper + Python child), `scheduler_persistent.log` shows `scheduler_running` event with all 6 cron jobs + `timezone: UTC`.
+
+**Caveat**: This is the laptop-bound deployment. The next session (today, 2026-06-05) brainstormed the cloud migration spec to escape this constraint entirely.
+
+---
+
+## §21 Bug audit + 10 fixes (2026-06-04, commits `7660095`..`0a549a3`)
+
+Found that the overnight scheduler ran but produced **zero shadow predictions**. Cascading audit uncovered ten bugs that pytest didn't catch. Dispatched a code-review subagent for breadth, fixed sequentially.
+
+### §21.1 Critical batch (commit `7660095`, then `6bb785e`)
+
+1. **`misfire_grace_time` default 1s** — APScheduler woke 3.88s late for the 06:00 predict_scan and silently dropped it. Fix: `misfire_grace_time=3600 + coalesce=True` on every `add_job`.
+2. **`CronTrigger` timezone not inherited from BackgroundScheduler on Windows** — incremental_ingest and validate_pending fired in Turkey local time (UTC+3) instead of UTC. Fix: explicit `timezone="UTC"` on each `CronTrigger`.
+3. **`calibration_version` silently overwritten in `run_daily_scan`** — the kwarg passed from `run_full_scan` was shadowed by `calibration_path.stem`, so the persisted column read `"calibration_1_5_4"` instead of the config's `"1_5_4"`. Fix: trust the kwarg; stem fallback only when caller didn't pass one.
+4. **`detect_feature_completeness` always returned `'degraded'`** — `_is_all_neutral(None)` returned True, so passing `sentiment_features=None` (which `run_full_scan` does as the file-existence-only approximation) marked every cohort `degraded`. Fix: `None` means "use file-existence only", not "all-neutral". A populated dict of all-zero values still counts as missing.
+5. **`scripts/predict_scan_cli.py` sys.path crash** — same `ModuleNotFoundError: scripts.backup_databases` that `run_scheduler.py` fixed earlier. Same fix pattern: inject project root into `sys.path` at the top of the script.
+6. **`send_message` inner-import shadowing** — `_job_predict_scan` had `from crypto_predictor.output.telegram_delivery import send_message` inside the function. Python parsed `send_message` as a local variable for the WHOLE function scope, so the earlier scan-start heartbeat raised `UnboundLocalError` before line 191 ran. Fix: remove the inner import, rely on the module-level one. Same trap that bit `load_secrets` in Task 10 of v0.2.1.
+
+Four new guard tests added: `test_all_triggers_use_utc_timezone`, `test_all_jobs_have_misfire_grace_time`, `test_all_jobs_coalesce_backlog`, `test_files_present_with_none_dicts_returns_full`. Suite 277 → 281.
+
+### §21.2 Polish batch (commit `9093091`)
+
+7. **`httpx.Client` leak on exception** — both sentiment-fetch and global-fetch blocks reorganized to `with _httpx.Client(...) as ...:` so the client closes even if a fetcher raises.
+8. **3× `datetime.now()` consolidated** — sentiment cache row, run_full_scan persistence, and output delivery now share one `asof` defined at the top of `_job_predict_scan`. Previously the three calls could drift seconds apart; `_load_predictions` in `run.py` used exact-match on `created_at`, so any drift could silently return zero rows.
+9. **SQLite `'-7 days'` now explicit UTC** — `_job_recalibrate` compared `validated_at` (stored as `+00:00` ISO) against `datetime('now', '-7 days')` which was server local time. Off by host TZ offset on non-UTC machines. Now `datetime('now', 'utc', '-7 days')`.
+10. **Strict YAML bool parsing** — `shadow_skip_telegram: 'false'` (quoted string) was truthy under `bool()`, silently turning OFF Telegram when the user wanted it ON. New `_strict_bool` accepts only Python bools and known truthy/falsy string tokens; unrecognized values raise.
+
+Suite 281 → 284.
+
+### §21.3 Round 3 — mcap_ranks gap (commit `0a549a3`)
+
+Live cohort came back `feature_completeness='degraded', missing_features='sentiment'`. Root cause: `data/mcap_ranks.yaml` never existed → `mcap_map = {}` → every symbol's rank was None → `top_symbols = [(s, r) for ... if r is not None][:30]` collapsed to `[]` → NewsAPI loop ran zero times → sentiment_cache.db never created → next scan's completeness check saw missing cache → `degraded`. No log told us why.
+
+Fixes:
+- `scripts/generate_mcap_ranks.py` — fetches CoinGecko top-250 markets, writes `data/mcap_ranks.yaml` as `{BASE_CCY: rank}`. 5 unit tests.
+- `jobs.py` emits `log.warning("mcap_ranks_missing", hint=...)` when the file is absent. No more silent fallback.
+- `_load_predictions` tolerance window (`asof ± 60s`) instead of exact-match — defensive against future re-introduction of datetime drift.
+
+Verified end-to-end after fix: `generate_mcap_ranks` wrote 250 entries; manual scan completed with `completeness='full', missing_features=null`, 342 predictions persisted; `sentiment_cache.db` populated with 30 rows of real NewsAPI sentiment (BTC −0.30, ETH −0.17, LINK +0.07 — bearish tone).
+
+Suite 284 → 289.
+
+### §21.4 v0.3-prep diagnostic — `shadow_status.py` (commit `534b002`)
+
+Quick CLI report on shadow data accumulation, intended for daily use during the dormant window:
+- Total / pending / closed counts with rolling hit rate
+- Breakdown by `feature_completeness` (full vs degraded), regime, calibration_version
+- Date range + day count vs the 14-day v0.3 ship target
+
+Live verify: 684 shadow rows (1 day, mix of degraded and full from the mcap_ranks bootstrap), 0 closed, 1/14 days.
+
+Suite 289 → 296.
+
+---
+
+## §22 v0.3 calibration revision shipped (2026-06-05, commits `ced7a04`..`d54b025`)
+
+User's call: "use the dormant 13 days productively, ship all v0.3 code now against synthetic data so Day-14 is just the final scripts against real shadow data."
+
+Subagent-driven execution against the plan at `docs/superpowers/plans/2026-06-03-v0.3-calibration-revision.md`. Same pattern as v0.2.1 — one implementer dispatch per task, controller diff-reviews + runs the test slice + commits, continuous.
+
+### §22.1 Math foundation (Tasks 1–3)
+
+- **Task 1 — Beta-binomial smoothing** (commit `ced7a04`, 6 tests). `smooth_isotonic_knots(x, y, n_per_knot, prior_alpha, prior_beta)`. `y_smooth = (n*y + alpha) / (n + alpha + beta)`. Pulls each knot toward the Beta(α, β) prior mean by effective sample size. Beta(1, 1) default pulls toward 0.5.
+- **Task 2 — Linear tail extrapolation** (commit `dfc1008`, 5 tests). `extrapolate_upper_tail(x, y, target_x, cap)`. Linear extension past the highest knot using the slope of the last two knots, capped at 1.0.
+- **Task 3 — Combined runtime pipeline** (commit `e39cce9`, 6 tests). `fit_smoothed_isotonic` does the critical math: fit isotonic → extract knots + per-knot n → smooth → **re-fit weighted IsotonicRegression** to restore monotonicity (smoothing alone can break it when low-n knots get pulled below their high-n neighbors). `apply_calibrated_lookup` is the runtime: in-domain linear interpolation, out-of-domain tail extrapolation.
+
+### §22.2 Storage + scripts (Tasks 4–7)
+
+- **Task 4 — Per-completeness calibration storage** (commit `029efcc`, 7 tests). `PerCompletenessCalibration` dataclass + `save_per_completeness` / `load_per_completeness` JSON round-trip + `lookup_calibrated_probability` with two-stage fallback: `(completeness, regime)` → `('full', regime)` → KeyError. Covers the spec-acknowledged BEAR sparse-sample risk.
+- **Task 5 — `refit_calibration_v03.py`** (commit `91aaf62`, 4 tests). The Day-14 calibration entry point. `weighted_concat(backtest, shadow, shadow_weight)` (default shadow_weight=3); `fit_per_completeness_calibration` skips groups under `MIN_SAMPLES_PER_FIT=30` with audit log; `load_predictions_for_fit` reads SQLite. CLI: `--shadow-weight --prior-alpha --prior-beta`.
+- **Task 6 — `refit_tilt_weights_v03.py`** (commit `329d5d7`, 4 tests). Per-tilt × per-regime correlation refit with sign-flip audit. `detect_sign_changes` flags any tilt whose new correlation flips sign vs Phase 1.5 weights AND `|corr| > 0.05`. Output YAML includes weights + `sign_changes` audit list.
+- **Task 7 — `ship_criteria_check.py`** (commit `45b8d37`, 7 tests). Two-bar gate. Bar 1 (mandatory): 7d rolling hit rate ≥ 62.5% AND Brier ≤ 0.226. Bar 2 (warning): per-p-bucket realized within ±10pp of expected for buckets with ≥ 20 samples (sparse buckets soft-pass). Telegram-style digest renderer + escalation recommendation (`prior_alpha=5` for headline fail, `manual_review_required` for bucket fail). Exit 0 = ship-ready, exit 2 = not ready. Implementer caught a numpy-bool bug in the plan reference and fixed it.
+
+### §22.3 Safety net + docs + activation (Tasks 8–10)
+
+- **Task 8 — 3-of-7 auto-rollback** (commit `3ef8614`, 5 tests). Post-ship circuit breaker. After v0.3 promotes from shadow to live, the validate job watches the rolling 7-day window of daily hit rates. If 3 or more days fall under 50%, the scheduler programmatically flips `data/scheduler_config.yaml` back to `mode: shadow` and Telegrams an auto-rollback alert. `should_auto_rollback`, `_query_daily_hit_rates` (UTC-explicit), `_flip_config_to_shadow` (yaml.safe_dump, loses comments — audit is in git diff).
+- **Task 9 — Promotion runbook** (commit `c65e4fa`, no tests). `docs/runbooks/v0.3-promotion.md` — six-step operator checklist for the Day-14 ship event. Pre-flight + refit + ship_criteria + flip + monitor + v1.0 tag criteria + manual rollback section. Implementer verified every script name, flag, exit code, and file path against the actual repo.
+- **Task 10 — Wire direction module to per-completeness** (commit `c13ab36`, 10 tests). The activation switch. `detect_calibration_format(path)` returns `'per_completeness' | 'legacy' | 'missing'`. `calibrate_direction` dispatcher in `scoring/direction.py`. `daily_scan.run_daily_scan` pre-loads either format ONCE before the symbol loop, per-symbol code branches on the format constant. Backwards-compatible: today's `calibration_1_5_4.json` (legacy schema) keeps working unchanged.
+
+### §22.4 Phase 1.5 weights gap fix (commit `d54b025`, no tests)
+
+Task 6's `refit_tilt_weights_v03.py` reads `data/tilt_weights_phase_1_5.yaml` for the sign-flip comparison baseline. The file never existed. Materialized from the source of truth (`DEFAULT_REGIME_WEIGHTS + MOMENTUM_FLIP_BY_REGIME` in `scoring/direction.py`). CHOP momentum carries the explicit −0.20 (sign-flip applied) so the v0.3 detector fires correctly when shadow data shows positive CHOP momentum correlation (the original 32.8% live miss hypothesis).
+
+### §22.5 v0.3 summary
+
+11 commits over ~3 hours. Suite **296 → 350 (+54)**, all green. ~600 LOC implementation + ~1100 LOC tests. Day-14 workflow reduced to three commands:
+
+```
+python scripts/refit_calibration_v03.py --shadow-weight 3.0
+python scripts/refit_tilt_weights_v03.py --shadow-weight 3.0
+python scripts/ship_criteria_check.py
+# review sign_changes block, manually edit scheduler_config.yaml, restart task
+```
+
+Plus the 3-of-7 auto-rollback now armed post-ship as a safety net.
+
+---
+
+## §23 Web UI + cloud migration brainstorm + spec (2026-06-05, commit `23432ca`)
+
+User raised two related problems:
+
+1. The Windows Task Scheduler requires the laptop to be on; if the user is away or the laptop sleeps, no scheduler. Today's session opened with: scheduler died overnight after session ended.
+2. Telegram alone is sparse for "watch model + decide" workflows — wanted a web UI.
+
+We brainstormed both together because the UI naturally lives on whatever server hosts the always-on scheduler.
+
+### §23.1 Brainstorm decision provenance
+
+| ID | Question | Choice |
+|---|---|---|
+| Q1 | UI scope | E — combo (dashboard + track record + operator) |
+| Q2 | Live database scope | E — full mart (predictions + prices + intel-hub + manual annotations + portfolio) |
+| Q3 | Hosting target | Hetzner CPX11 Falkenstein (€4/month) |
+| Q4 | Migration cadence | A — hard cutover + data migrate (zero data loss) |
+| Q5 | UI auth model | A — Cloudflare Access (magic link / Google OAuth, one-email allowlist) |
+| Q6 | First-ship UI scope | B — MVP 3 screens + iterate, with Ask Claude tab added to v1.0 |
+| add | SSH access for the agent | A — full access via `crypto-predictor` deploy user with key auth + sudo restricted to three service restarts |
+| add | Domain | `predictor.kry.app` (Cloudflare Registrar, $9/year) |
+| add | Deploy workflow | Manual `git pull && systemctl restart`; GitHub Actions deferred |
+| add | Secrets management | `/etc/crypto-predictor/secrets.env` + systemd `EnvironmentFile=` |
+| add | Backup | Nightly `pg_dump` + parquet rsync to local `/var/lib/crypto-predictor/backups/` |
+
+### §23.2 What got added beyond the original "just a UI" ask
+
+The "Ask Claude" tab. User asked: "from the UI, will I be able to reach you?" Two interpretations:
+- The Claude Code agent (this session): NO. My session lives in the Windows terminal; the Hetzner server can't push to it.
+- A server-side Claude agent: YES via Anthropic API + Claude Agent SDK. Different agent (no shared memory with this session) but same model family, with tool access to the DB / scripts / journal. Mobile-first.
+
+We added "Ask Claude" as a fourth v1.0 tab. Cost cap via `CLAUDE_DAILY_USD_LIMIT` env var (default $5/day). Session continuity via `claude_chat_log` PG table.
+
+### §23.3 SSH ergonomics test (this session)
+
+Tested before committing to the SSH-access decision:
+- `ssh -V` → OpenSSH 10.2 installed ✓
+- TCP + TLS handshake to GitHub works (host key added to `~/.ssh/known_hosts`) ✓
+- No SSH keys currently exist on this machine (git push uses HTTPS + Windows Credential Manager)
+- Bash tool's `~` resolves to `/c/Users/Koray` = PowerShell's `$HOME` ✓ — keys created in either context are mutually visible
+- `.ssh/config` write/read works from Bash ✓
+
+Migration day workflow documented: user generates ed25519 keypair in PowerShell, uploads `.pub` to Hetzner panel, accepts host key on first login, appends a `Host crypto-predictor` block to `~/.ssh/config`, then my Bash tool runs any `ssh crypto-predictor "<cmd>"`.
+
+### §23.4 Spec shipped
+
+`docs/superpowers/specs/2026-06-05-web-ui-cloud-migration-design.md`, 540 lines, 10 sections. Commit `23432ca`, pushed.
+
+Sections: architecture, migration sequence (T+0 → T+210, 06:00 UTC avoidance constraint), PG schema (10 migrated tables + 7 new mart tables with type uplift table), Streamlit v1.0 (4 screens with build budget), out of scope (16 items), ops (deploy + secrets + backup + SSH), risk register (15 risks), success criteria + ship blockers, open questions, v0.3 dormant interaction note.
+
+Self-review applied: scheduling-window constraint added (don't span 06:00 UTC during cutover); type uplift rules expanded into a table.
+
+---
+
+## §24 State as of end-of-session (2026-06-05)
+
+### What's live
+
+- Windows Task Scheduler `CryptoPredictorScheduler` running (PID rotates; check `Get-ScheduledTask`)
+- Shadow data accumulating in local `predictions.db` (684 rows from June 4; June 5 adds whatever the cron fired today, untouched by us today)
+- Telegram heartbeat + post-validation digest go to `kkorkmaz1881@gmail.com`'s bot at 06:00 / 06:30 UTC daily
+- v0.3 code shipped + tested but NOT activated; `data/scheduler_config.yaml` still on `mode: shadow, calibration_version: 1_5_4`
+
+### What's queued
+
+1. **User review of the v1.0 spec** (`docs/superpowers/specs/2026-06-05-web-ui-cloud-migration-design.md`) — gate before plan writing
+2. **Two implementation plans** (writing-plans skill, when spec is approved):
+   - `docs/superpowers/plans/2026-06-05-cutover-runbook.md` — migration day step-by-step
+   - `docs/superpowers/plans/2026-06-05-ui-v1.0-build.md` — Streamlit 4 screens, subagent-driven
+3. **Day-14 v0.3 ship event** — runs against shadow data accumulated to that point. The migration to Hetzner does NOT reset the 14-day clock; SQLite → PG transfer preserves all shadow rows. Day-14 currently projected: ~2026-06-18 if migration happens this week.
+
+### What lives off-repo (so context fade doesn't lose it)
+
+- `data/secrets.env` — gitignored; contains `TELEGRAM_BOT_TOKEN`, `NEWSAPI_API_KEY` populated; `ANTHROPIC_API_KEY` slot exists but empty (will be filled during UI build for Ask Claude)
+- `data/scheduler_config.yaml` — tracked; currently `mode: shadow`
+- `data/mcap_ranks.yaml` — tracked; 250 entries from CoinGecko, refresh manually periodically
+- `data/tilt_weights_phase_1_5.yaml` — tracked; baseline for v0.3 sign-flip audit
+- `~/.crypto-predictor-backups/` — nightly SQLite backups from §19.3
+- `logs/scheduler_persistent.log` — append-only; rotate manually if it grows
+
+### Test count progression
+
+| Milestone | Suite size |
+|---|---|
+| End of 2026-06-03 session | 277 |
+| After §21 bug audit + 10 fixes | 296 |
+| After §22 v0.3 Tasks 1–10 | 350 |
+| Current | 350 |
+
+### Active CLAUDE-side decisions waiting on the user
+
+- Spec review verdict (approve / change requested)
+- Migration day scheduling (which day; window must not span 06:00 UTC)
+
+---
+
+*End of session journal. 2026-06-04 + 2026-06-05.*
