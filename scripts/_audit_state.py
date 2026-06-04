@@ -1,25 +1,34 @@
-"""Quick state audit — mode distribution + recent activity."""
+"""Quick state audit — mode + completeness + calibration distribution."""
 import sqlite3
 from pathlib import Path
 
 DB = Path(__file__).resolve().parents[1] / "predictions.db"
 c = sqlite3.connect(str(DB))
 
-print("=== Mode distribution ===")
-for m, n in c.execute("SELECT mode, COUNT(*) FROM predictions GROUP BY mode"):
-    print(f"  mode={m}  n={n}")
-
-print()
-print("=== Recent activity (latest 5 created_at) ===")
+print("=== Mode x completeness x calibration_version ===")
 for row in c.execute(
-    "SELECT mode, COUNT(*), MIN(created_at), MAX(created_at) "
-    "FROM predictions GROUP BY mode"
+    "SELECT mode, feature_completeness, calibration_version, missing_features, "
+    "       COUNT(*) FROM predictions "
+    "GROUP BY mode, feature_completeness, calibration_version, missing_features "
+    "ORDER BY 1, 2, 3"
 ):
-    print(f"  mode={row[0]}  n={row[1]}  first={row[2]}  last={row[3]}")
+    missing = row[3] if row[3] is not None else "NULL"
+    print(f"  mode={row[0]:8} comp={row[1]:9} cal={row[2]:20} "
+          f"missing={missing:20} n={row[4]}")
 
 print()
-print("=== Latest cron run state ===")
-print("  scheduler_config.yaml says shadow, so any new rows should be mode=shadow")
-print("  if there are no shadow rows, the predict_scan never fired since v0.2.1 ship")
-
+print("=== Latest shadow row sample ===")
+row = c.execute(
+    "SELECT id, symbol, created_at, mode, feature_completeness, "
+    "       missing_features, calibration_version, regime, p_direction "
+    "FROM predictions WHERE mode='shadow' "
+    "ORDER BY created_at DESC LIMIT 1"
+).fetchone()
+if row:
+    cols = ["id", "symbol", "created_at", "mode", "completeness", "missing",
+            "calibration_version", "regime", "p_direction"]
+    for k, v in zip(cols, row):
+        print(f"  {k:22} {v}")
+else:
+    print("  no shadow rows yet")
 c.close()

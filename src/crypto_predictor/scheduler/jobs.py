@@ -188,7 +188,11 @@ def _job_predict_scan() -> None:
     from crypto_predictor.output.telegram_summary import (
         render_telegram_summary, render_high_conviction_alert,
     )
-    from crypto_predictor.output.telegram_delivery import send_message
+    # NOTE: send_message is already imported at module level (line 28).
+    # Re-importing inside the function would shadow it as a local variable for
+    # the WHOLE function scope, which makes the earlier heartbeat reference
+    # (lines ~80) raise UnboundLocalError. Same trap that bit the load_secrets
+    # inner import in Task 10. Module-level import is the only one used.
     from crypto_predictor.output.thresholds import (
         load_thresholds, classify_high_conviction,
     )
