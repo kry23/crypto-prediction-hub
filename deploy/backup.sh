@@ -70,6 +70,10 @@ else
     echo "WARNING: $REPO/data/history missing or has no parquet files — skipping history mirror (refusing to wipe the backup)" >&2
 fi
 
+# Force owner-only on the dump files: `>` truncation of a pre-existing same-day
+# file keeps its old mode, so umask alone isn't enough on re-runs.
+chmod 600 "$BACKUP_ROOT"/pg/*.sql.gz "$BACKUP_ROOT"/sqlite/*.db 2>/dev/null || true
+
 # 4) Retention — prune dated dumps older than KEEP_DAYS
 find "$BACKUP_ROOT/pg" -name 'pg_*.sql.gz' -mtime "+$KEEP_DAYS" -delete
 find "$BACKUP_ROOT/sqlite" -name '*.db' -mtime "+$KEEP_DAYS" -delete
