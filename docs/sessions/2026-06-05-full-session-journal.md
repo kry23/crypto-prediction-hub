@@ -199,12 +199,164 @@ Self-review applied: scheduling-window constraint added (don't span 06:00 UTC du
 | End of 2026-06-03 session | 277 |
 | After §21 bug audit + 10 fixes | 296 |
 | After §22 v0.3 Tasks 1–10 | 350 |
-| Current | 350 |
+| After §26 UI Tasks 1–9 | 465 |
+| Current | 465 |
+
+---
+
+## §25 Two implementation plans written (2026-06-05, commit `5e32ec1`)
+
+After the v1.0 spec was approved (§23.4), the brainstorming skill mandates the writing-plans skill next. Two plans derived from the spec, both ~500+ lines:
+
+- **`docs/superpowers/plans/2026-06-05-cutover-runbook.md`** — operational runbook the OPERATOR (Koray) executes manually. 34 steps split into pre-cutover prep + 5 phases (A: base server + SSH access, B: code + PostgreSQL, C: systemd services + Cloudflare Tunnel, D: smoke test, E: decommission Windows). Each step tagged `[local]` / `[server]` / `[browser]` / `[via me]` so the operator knows whether to run PowerShell, click a panel, or ask the agent to SSH. Rollback path documented for any step before T+195. 24-hour post-cutover monitoring + backup-restore smoke test scheduled for the first week.
+
+- **`docs/superpowers/plans/2026-06-05-ui-v1.0-build.md`** — subagent-driven implementation plan for the 4-screen Streamlit + intel-bridge build. 10 tasks: migration script, schema bootstrap, UI scaffold, Dashboard page, Track Record page, Operator page + `/jobs` endpoint, Ask Claude (6 tools), systemd units, intel-bridge poller, smoke + v1.0 tag.
+
+Self-review applied: cutover Step 16 cleanup (inline reasoning removed, single coherent root + chown command sequence), UI Task 1 Step 4 clarified (phantom "Task 1.5" reference fixed; PG insert smoke happens during cutover Step 28, not in a separate task).
+
+User approved both plans the same day. Execution started immediately on UI Tasks 1–5, which build against the local Windows machine and don't require Hetzner. Tasks 6–10 partly require Hetzner but were authored ahead of cutover so the post-migration deploy is just `git pull` + `systemctl restart`.
+
+---
+
+## §26 UI v1.0 Tasks 1–9 shipped via subagent-driven-development (2026-06-05)
+
+Same pattern as v0.2.1 and v0.3: one implementer subagent dispatch per task, controller diff-reviews + runs the test slice + commits, continuous execution. 9 of 10 tasks shipped in a single session. Task 10 (smoke + v1.0 tag) requires a real Hetzner deploy and is deferred to post-cutover.
+
+### §26.1 Foundation (Tasks 1–3, commits `95b1220`, `9ed325c`, `f9de9aa`)
+
+- **Task 1 — `scripts/migrate_sqlite_to_postgres.py`** (commit `95b1220`, +15 tests). Reads the three SQLite DBs and ports them to PG with idempotent `ON CONFLICT DO NOTHING`. Implementer caught five improvements vs the reference skeleton, the most important being **reserved-word handling**: `metrics_rolling.window` is a PG reserved word, requires double-quote escaping; without it the real cutover INSERT would have crashed on the first metrics row. Live dry-run against the local DBs reported 23,078 total rows across 10 tables. `psycopg[binary]>=3.2` added as a dep, lazy-imported so `--dry-run` doesn't require it.
+
+- **Task 2 — PG schema bootstrap** (commit `9ed325c`, +15 tests). `migrations/001_initial_schema.sql` (316 lines) — all 17 production tables + the `_migrations` tracker. `scripts/init_postgres_schema.py` applies migrations in lexical order, tracks SHA-256 per file, logs `init_sha_drift` warning when a previously-applied file's hash changes. Idempotent: every CREATE TABLE / CREATE INDEX uses `IF NOT EXISTS`. CHECK constraints on enum-like columns (mode, status, regime, confidence_flag, feature_completeness). FK `predictions_features → predictions ON DELETE CASCADE`; `manual_annotations → predictions ON DELETE SET NULL`. GIN index on `news_feed.symbols_mentioned` array; partial index `WHERE closed_at IS NULL` on `manual_annotations`. The `_migrations` tracker is declared first in the file.
+
+- **Task 3 — UI scaffold** (commit `f9de9aa`, +7 tests). `src/crypto_predictor/ui/` package with `app.py` (entry point using `st.navigation`), `db.py` (`@st.cache_resource` `ConnectionPool` size 2..5), `auth.py` (Cloudflare Access header reader with dev fallback). Four page placeholder modules under `pages/`. `streamlit>=1.40` + `psycopg-pool>=3.2` added to deps. The `st.context.headers` API requires Streamlit 1.40+, documented in `auth.py`.
+
+### §26.2 Three pages (Tasks 4–6, commits `90a9e59`, `a06402a`, `da9b386`)
+
+- **Task 4 — Dashboard page** (commit `90a9e59`, +8 tests). `src/crypto_predictor/ui/queries.py` ships `todays_slate(conn, mode)` returning regime, calibration version, mode, n_predictions, n_wild_cards, n_ceiling_hit, top_long, top_short, wild_cards, active_annotations, next_scan_dt. Page renders metric strip + three sortable dataframes + annotations placeholder. Composite scores displayed as basis points (consistency with markdown report from §19.9). 60-second cache TTL. Implementer added Decimal→float coercion in `_rows_to_dicts` so PG `NUMERIC` returns don't break Streamlit/pandas; added `(confidence_flag IS NULL OR <> 'WILD_CARD')` to keep NORMAL+NULL-flag rows in long/short tables.
+
+- **Task 5 — Track Record page** (commit `a06402a`, +9 tests). Four new query helpers in `queries.py`: `rolling_kpis`, `per_bucket_calibration`, `daily_hit_rates`, `by_regime_and_flag`. Page renders five-metric KPI strip with delta vs 62.5%/0.226 baselines, plotly line chart for daily hit rate trend with 62.5% baseline ribbon, plotly scatter for per-p-bucket calibration (size+color by sample count, y=x diagonal overlay), regime × flag breakdown table, and a "Run ship_criteria_check.py" button that subprocesses the script and gates on exit code 0/2/other. 5-minute cache TTL. Critical for the v0.3 dormant-window operator: this is the screen that tells the user when shadow data is ripe for the Day-14 ship.
+
+- **Task 6 — Operator page + `/jobs` HTTP endpoint** (commit `da9b386`, +16 tests). `scripts/run_scheduler.py` extended with `_build_jobs_app(scheduler)` factored out for testability (Flask test client; no live port bind in unit tests) and `_start_jobs_endpoint` that spawns a daemon thread on `127.0.0.1:8502` ONLY on the production path (skipped when `stop_event` injected by tests). `src/crypto_predictor/ui/systemd_helpers.py` exposes `systemd_available`, `scheduler_status`, `next_jobs`, `restart_service`, `tail_journal`, `trigger_script` — every helper degrades gracefully on Windows where `systemctl` is absent. Page implements six sections per spec §4.3 with `type RESTART to confirm` token gate on destructive actions and `EnvironmentFile` preservation on config saves. `flask>=3.0` added as a dep.
+
+### §26.3 Ask Claude (Task 7, commit `cc9b185`)
+
+Biggest single task of the build (~2 days estimated). 30 new tests.
+
+`src/crypto_predictor/ui/claude_tools.py` ships six tools:
+- `query_predictions(conn, filters, limit)` with allowlist of filter columns (defends against SQL injection)
+- `query_completeness_breakdown(conn, window_days)`
+- `query_calibration_state(version)` detecting three on-disk shapes (`legacy`, `per_completeness`, `unknown`) — future-proofs v0.3 → v0.4 schema flip
+- `run_ship_criteria_check()` subprocesses the script + regex-parses stdout
+- `query_intel_hub(conn, category, hours_back)` merging `whale_txs` + `news_feed` with `source` marker
+- `read_journal(section_regex, journal_path)` walks markdown sections with output capped at 8 KB to bound model context
+
+`TOOL_SCHEMAS` module constant holds Anthropic-API-shaped JSON schemas for all six. `dispatch_tool` wrapper splits "needs `conn`" vs not via `TOOLS_NEEDING_CONN`.
+
+`src/crypto_predictor/ui/claude_session.py`:
+- `get_or_create_session_id()` — `st.session_state['claude_session_id']` (tab-lifetime, Streamlit has no cookie API)
+- `todays_claude_cost(conn)` and `is_cost_capped()` — env var `CLAUDE_DAILY_USD_LIMIT` default $5/day, malformed env falls back to default
+- `load_conversation` / `persist_turn` with JSONB tool_calls serialization
+- `call_claude(messages, system, tools)` — bare `anthropic` SDK (no `claude-agent-sdk` to avoid asyncio/Streamlit conflicts). Manual tool-use loop with `max_turns=8` safeguard. Prompt caching `cache_control={"type": "ephemeral"}` on the system prompt. Cost computed as `tokens_in * 15e-6 + tokens_out * 75e-6` (claude-opus-4-7 approximate pricing — over-estimation is fine since this is a safety cap, not a billing line).
+
+Page implementation: require_auth → `ANTHROPIC_API_KEY` presence check (warning banner + stop if missing) → cost-cap gate (`is_cost_capped()` before rendering chat input) → session id → history load + render → sidebar cost meter → `st.chat_input` → persist user turn → spinner-wrapped `call_claude` → render assistant + persist with cost. `anthropic>=0.40` added as a dep.
+
+Test coverage proves the cost cap: five tests cover the under/over/default-env/invalid-env paths plus an exact cost-formula assertion (`100 * 15e-6 + 10 * 75e-6 = $0.00225`).
+
+### §26.4 Deploy artifacts (Tasks 8–9, commits `1a9de46`, `bea6ef2`)
+
+- **Task 8 — systemd unit templates + install script** (commit `1a9de46`, +6 tests). Three `.service` files (scheduler, ui, intel-bridge) committed under `deploy/systemd/` with LF line endings, plus `deploy/install_systemd_units.sh` (bash, set -euo pipefail, sudo gate, idempotent enable+start), plus `deploy/README.md` documenting the layout and the post-cutover update flow. `chmod +x` set on the install script via `git update-index --chmod=+x`. UI unit `After=` includes the scheduler so `/jobs` endpoint is up when UI polling starts.
+
+- **Task 9 — intel-bridge poller** (commit `bea6ef2`, +9 tests). `src/crypto_predictor/intel_bridge/` package with `fetchers.py` (Protocol interface + `StubWhaleFetcher` / `StubNewsFetcher` returning `[]`; real fetchers swap in for Day-14 as a one-file change) and `poller.py` (`poll_whales` with `ON CONFLICT (chain, tx_hash) DO NOTHING`; `poll_news` with in-batch dedup on `(source, url, ts)`). `scripts/run_intel_bridge.py` is the systemd entry point with SIGINT/SIGTERM handling, lazy `psycopg.connect`, `INTEL_BRIDGE_INTERVAL_SECONDS` env override defaulting to 900 s, and `max_ticks` parameter that bounds the loop for tests.
+
+### §26.5 Test count progression
+
+| Milestone | Suite size | Δ |
+|---|---|---|
+| End of §22 (v0.3 done) | 350 | — |
+| Task 1: SQLite→PG migrator | 365 | +15 |
+| Task 2: PG schema bootstrap | 380 | +15 |
+| Task 3: UI scaffold | 387 | +7 |
+| Task 4: Dashboard page | 395 | +8 |
+| Task 5: Track Record page | 404 | +9 |
+| Task 6: Operator + /jobs | 420 | +16 |
+| Task 7: Ask Claude | 450 | +30 |
+| Task 8: systemd units | 456 | +6 |
+| Task 9: intel-bridge | 465 | +9 |
+| **Total v1.0 contribution** | **465** | **+115** |
+
+### §26.6 Task 10 deferred to post-cutover
+
+Smoke test against the real Hetzner deployment + polish + `v1.0` git tag requires the cloud server to exist. Task 10 will land in the same session as the cutover or immediately after (per cutover Phase D Step 29).
+
+---
+
+## §27 GitHub push auth fix (2026-06-05)
+
+After Task 6 (commit `da9b386`) `git push` started returning 403 "Permission to kry23/crypto-prediction-hub.git denied to **kry2323**." The first ~5 UI task commits had pushed cleanly. Mid-session something flipped the cached credential to a different GitHub account.
+
+Investigation via PowerShell `cmdkey /list | Select-String github`:
+- `LegacyGeneric:target=git:https://github.com` (Git Credential Manager generic)
+- `LegacyGeneric:target=gh:github.com:` (gh CLI generic)
+- `LegacyGeneric:target=gh:github.com:kry2323` (the wrong-user CLI entry)
+
+`git config --get remote.origin.url` returned `https://github.com/kry23/...` (correct). The 403 was Git Credential Manager finding the `kry2323` token in the cache, sending it, GitHub rejecting because that user doesn't have write access to the `kry23` repo.
+
+**Fix applied**:
+1. `cmdkey /delete:LegacyGeneric:target=git:https://github.com` — cleared GCM generic entry
+2. `cmdkey /delete:LegacyGeneric:target=gh:github.com:` — cleared gh CLI generic
+3. `cmdkey /delete:LegacyGeneric:target=gh:github.com:kry2323` — cleared the wrong-user gh entry
+4. `git config --global credential.https://github.com.gitHubAuthModes device` — force device-code flow next time so the agent's non-interactive Bash doesn't hang waiting for a browser
+
+First `git push` after step 3 hung (15s timeout) — Git Credential Manager had opened a browser on the user's machine for OAuth. The user authenticated with the correct `kry23` account in the background. The retry push succeeded immediately because the credentials were now cached correctly. Range pushed: `a06402a..bea6ef2` — UI Tasks 6, 7, 8, 9 + everything since the last successful push.
+
+Aftermath:
+- `git config --global --list | grep github` shows the device-flow override is in place. If the cache ever clears again, the next push prints a URL + 8-character code to the terminal instead of opening a browser — works in any shell, including the agent's non-interactive one.
+- The wrong-user `kry2323` entries are gone from Credential Manager. Only the correct `kry23` token remains.
+
+This is the kind of operational paper-cut that's worth journaling because it'll likely recur if the user logs into another GitHub account on the same Windows profile.
+
+---
+
+## §28 State as of end-of-session (2026-06-05, post-§26 + post-§27)
+
+### What's live
+
+- Windows Task Scheduler `CryptoPredictorScheduler` running (or stopped between sessions; check `Get-ScheduledTask`); shadow data accumulating in local `predictions.db`
+- Telegram heartbeat + post-validation digest go to the user's bot at 06:00 / 06:30 UTC daily IF the scheduler is alive
+- v0.3 code (commits `ced7a04` … `c13ab36`) + UI v1.0 code (`95b1220` … `bea6ef2`) all shipped + pushed to origin
+- 465 tests, all green
+- `data/scheduler_config.yaml` still on `mode: shadow, calibration_version: 1_5_4` (v0.3 not promoted yet)
+
+### What's queued
+
+1. **GitHub push auth — fixed** (§27). No user action needed.
+2. **Cutover day scheduling** — user decides; constraint is the migration window must NOT span 06:00 UTC (cutover stops the Windows scheduler at T+0, so an in-window 06:00 UTC firing is lost)
+3. **UI Task 10** — smoke + polish + `v1.0` git tag, ~1–2 hours work on the Hetzner box, runs as part of the cutover Phase D or immediately after
+4. **Day-14 v0.3 ship** — `python scripts/refit_calibration_v03.py && python scripts/refit_tilt_weights_v03.py && python scripts/ship_criteria_check.py`, then edit `data/scheduler_config.yaml`. Currently projected for ~2026-06-18 if migration happens before then; migration preserves shadow data so the 14-day clock keeps ticking through it.
+
+### What lives off-repo (so context fade doesn't lose it)
+
+Same as §24, plus:
+- `~/.gitconfig` global now has `credential.https://github.com.gitHubAuthModes=device` from §27 fix
+- Windows Credential Manager has only the **correct** `kry23` GitHub PAT cached (after §27); previous `kry2323` entries deleted
+- `pyproject.toml` dependencies grew during §26: `streamlit>=1.40`, `psycopg[binary]>=3.2`, `psycopg-pool>=3.2`, `flask>=3.0`, `anthropic>=0.40` — five new lines
 
 ### Active CLAUDE-side decisions waiting on the user
 
-- Spec review verdict (approve / change requested)
-- Migration day scheduling (which day; window must not span 06:00 UTC)
+- **Cutover day** — pick a window away from 06:00 UTC. Recommended: a Saturday or Sunday afternoon TR time (12:00 UTC = 15:00 TR is a clean choice). Until then, the Windows scheduler is the operational scheduler.
+
+(The previous "spec review verdict" and "plan review verdict" decisions from §24 are both now resolved — user approved both.)
+
+### Session arc
+
+This is the third consecutive day of substantial work:
+- **2026-06-03**: v0.2.1 shadow infrastructure ship + spec/plan brainstorming for v0.3
+- **2026-06-04**: bug audit + 10 fixes + persistent operation
+- **2026-06-05**: v0.3 implementation Tasks 1–10 + web UI brainstorm + spec + 2 plans + UI Tasks 1–9 + push auth fix
+
+The crypto-predictor codebase grew from a single-file SQLite + Telegram-only system on 2026-06-03 to a full Streamlit web app + PG-backed mart + cloud-deployable architecture by end of 2026-06-05, with v0.3 calibration revision ready to ship on Day-14 and all v1.0 UI build code shipped (and largely tested) ahead of the actual cloud cutover.
+
+The dormant phase begins now in earnest.
 
 ---
 
