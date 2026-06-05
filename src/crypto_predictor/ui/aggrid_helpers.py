@@ -1,70 +1,22 @@
-"""AG-Grid tables themed to match Midnight Desk.
+"""AG-Grid tables that match the Midnight Desk theme.
 
 Streamlit's native ``st.dataframe`` is a canvas grid — CSS can't touch it, so it
 stays light/grey no matter the theme. This wraps ``streamlit-aggrid`` (a real
-DOM grid) with the slate-navy + teal palette and IBM Plex Mono figures, plus
-optional sign colouring (green ↑ / red ↓) for signed numeric columns.
+DOM grid) instead.
 
-Use :func:`render_table` everywhere we previously called ``st.dataframe``.
+Note on theming: st_aggrid 1.2.x bundles AG-Grid's *new* Theming API, which
+dropped the old ``.ag-theme-alpine`` CSS classes and CSS variables — so
+``custom_css`` selectors targeting them do nothing. The reliable path is
+``theme="streamlit"``, which inherits the active Streamlit theme (dark here, set
+in ``.streamlit/config.toml``). Per-cell colour still works because ``cellStyle``
+goes through grid options, independent of the theme.
 """
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
-
-# Repaint the (light) "alpine" theme into Midnight Desk dark. CSS *variables*
-# alone proved unreliable in the bundled build, so we also set explicit
-# background/colour on the concrete elements (header, rows, cells) with the
-# theme-class prefix — that always wins over the bundled light theme.
-_BG = "#161D2E"
-_BG_ODD = "#131A28"
-_HEADER_BG = "#1B2438"
-_TEXT = "#E6EDF3"
-_MUTED = "#8B98AD"
-_BORDER = "rgba(139, 152, 173, 0.16)"
-_HOVER = "rgba(45, 212, 191, 0.10)"
-
-_AG_DARK_CSS: dict[str, dict[str, str]] = {
-    # CSS-var layer (works on builds that honour it) ...
-    ".ag-theme-alpine": {
-        "--ag-background-color": _BG,
-        "--ag-odd-row-background-color": _BG_ODD,
-        "--ag-header-background-color": _HEADER_BG,
-        "--ag-foreground-color": _TEXT,
-        "--ag-header-foreground-color": _MUTED,
-        "--ag-border-color": _BORDER,
-        "--ag-row-hover-color": _HOVER,
-        "--ag-font-family": "'IBM Plex Mono', ui-monospace, monospace",
-        "--ag-font-size": "13px",
-        "background-color": _BG,
-    },
-    # ... and an explicit-element layer that always wins.
-    ".ag-theme-alpine .ag-root-wrapper": {
-        "background-color": _BG, "color": _TEXT,
-        "border": f"1px solid {_BORDER}", "border-radius": "10px",
-    },
-    ".ag-theme-alpine .ag-header": {
-        "background-color": _HEADER_BG, "border-bottom": f"1px solid {_BORDER}",
-    },
-    ".ag-theme-alpine .ag-header-cell": {"color": _MUTED},
-    ".ag-theme-alpine .ag-header-cell-label": {
-        "font-weight": "600", "letter-spacing": "0.04em",
-        "text-transform": "uppercase", "font-size": "11px", "color": _MUTED,
-    },
-    ".ag-theme-alpine .ag-row": {
-        "background-color": _BG, "color": _TEXT,
-        "border-bottom": f"1px solid rgba(139,152,173,0.08)",
-    },
-    ".ag-theme-alpine .ag-row-odd": {"background-color": _BG_ODD},
-    ".ag-theme-alpine .ag-row-hover": {"background-color": _HOVER},
-    ".ag-theme-alpine .ag-cell": {"color": _TEXT, "border": "none"},
-    ".ag-theme-alpine .ag-paging-panel": {
-        "background-color": _HEADER_BG, "color": _MUTED,
-        "border-top": f"1px solid {_BORDER}",
-    },
-}
 
 # Colour a signed numeric cell: teal-green up, red down, muted at zero/blank.
 _SIGN_COLOR = JsCode(
@@ -87,9 +39,9 @@ def render_table(
     color_cols: Sequence[str] = (),
     key: str | None = None,
 ) -> None:
-    """Render ``data`` as a Midnight-Desk AG-Grid (display-only).
+    """Render ``data`` as a dark, theme-matched AG-Grid (display-only).
 
-    ``color_cols`` are signed numeric columns to colour by sign. ``key`` must be
+    ``color_cols`` are signed numeric columns coloured by sign. ``key`` must be
     unique per grid on a page.
     """
     df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
@@ -97,25 +49,22 @@ def render_table(
         return
 
     gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_default_column(
-        sortable=True, resizable=True, filter=False,
-        suppressMenu=True,                 # AG-Grid < 31
-        suppressHeaderMenuButton=True,      # AG-Grid >= 31 (funnel/menu icon)
-        cellStyle={"fontFamily": "'IBM Plex Mono', monospace"},
-    )
+    gb.configure_default_column(sortable=True, resizable=True, filter=False)
     for col in color_cols:
         if col in df.columns:
             gb.configure_column(col, cellStyle=_SIGN_COLOR)
     options = gb.build()
-    options["domLayout"] = "autoHeight"   # size to content, no inner scrollbar
+    options["domLayout"] = "autoHeight"                  # size to content
+    options["autoSizeStrategy"] = {"type": "fitGridWidth"}  # fill width
 
     AgGrid(
         df,
         gridOptions=options,
-        theme="alpine",
-        custom_css=_AG_DARK_CSS,
+        theme="streamlit",       # inherits the dark Streamlit theme
         allow_unsafe_jscode=True,
-        fit_columns_on_grid_load=True,
-        update_on=[],            # display only — no Streamlit reruns on sort
+        update_on=[],            # display only — no reruns on sort
         key=key,
+        show_toolbar=False,
+        show_search=False,
+        show_download_button=False,
     )
