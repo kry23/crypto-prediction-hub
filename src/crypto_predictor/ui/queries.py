@@ -41,9 +41,14 @@ def _compute_next_scan(now: datetime) -> datetime:
 
 
 def _current_regime(cur) -> str:
-    """Most recent regime from `regime_log` (or 'unknown')."""
+    """Most recent prediction's regime (or 'unknown').
+
+    The `regime_log` table is defined but never populated by the pipeline, so
+    reading it always yielded 'unknown'. The authoritative per-scan regime lives
+    on each prediction row, so read the latest one instead.
+    """
     cur.execute(
-        "SELECT regime FROM regime_log ORDER BY date DESC LIMIT 1"
+        "SELECT regime FROM predictions ORDER BY created_at DESC LIMIT 1"
     )
     row = cur.fetchone()
     if row is None:
