@@ -1,0 +1,14 @@
+[Unit]
+Description=Crypto Predictor — SQLite->PG sync bridge (UI freshness)
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=crypto-predictor
+Group=crypto-predictor
+WorkingDirectory=/opt/crypto-predictor
+EnvironmentFile=/etc/crypto-predictor/secrets.env
+ExecStart=/opt/crypto-predictor/venv/bin/python scripts/sync_sqlite_to_pg.py --predictions ./predictions.db --sentiment ./data/sentiment_cache.db --global ./data/global_cache.db --pg ${DATABASE_URL}
+StandardOutput=journal
+StandardError=journal

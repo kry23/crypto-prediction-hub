@@ -360,4 +360,42 @@ The dormant phase begins now in earnest.
 
 ---
 
-*End of session journal. 2026-06-04 + 2026-06-05.*
+## §29 Cloud cutover executed (2026-06-05/06, commit `29a7697`)
+
+The cutover from the spec/plan (§23, §25) was executed live. It deviated from the runbook in four material ways, each forced by reality:
+
+### §29.1 Provider: Hetzner → Hostinger
+DigitalOcean and Hetzner both failed at payment/verification (recurring TR-card friction). Landed on a **Hostinger KVM VPS** (Ubuntu 24.04, 2 vCPU / 4 GB / ~48 GB, Germany). The runbook is 95% provider-agnostic — only the ordering screen changed; everything from `ssh root@` onward (Step 7+) ran verbatim. The SSH keypair (`~/.ssh/hetzner_key`, kept the name) + `~/.ssh/config` alias `crypto-predictor` worked unchanged.
+
+Server: `109.106.244.78`. Deploy user + restricted sudo (`/usr/bin/systemctl` — the runbook's `/bin/systemctl` would NOT have matched sudoers on 24.04). PG 16 tuned to detected RAM (shared_buffers 979 MB). PG password generated **server-side** and written straight into `secrets.env` — never entered the agent's context.
+
+### §29.2 Secrets architecture fix (not in the runbook)
+The code reads `load_secrets(project_root/"data"/"secrets.env")` — a **file**, not env vars. The runbook put secrets in `/etc/crypto-predictor/secrets.env` for systemd `EnvironmentFile=`. Two different mechanisms. Resolved with a **symlink**: `data/secrets.env → /etc/crypto-predictor/secrets.env`, so `load_secrets()` (file read via symlink) and systemd (`EnvironmentFile=` direct) share one source. The local `data/secrets.env` actually had `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` + `NEWSAPI_API_KEY` (a PowerShell regex/BOM quirk had hidden two of them in an earlier check); merged server-side without exposing values.
+
+### §29.3 DNS: GoDaddy → Cloudflare, and auth: Zero Trust → nginx basic-auth
+`krypredictor.com` was registered at GoDaddy (NS `domaincontrol.com`), not on Cloudflare. Added the zone to Cloudflare, switched nameservers at GoDaddy (`memphis`/`mimi.ns.cloudflare.com`) — propagated in minutes. Deleted the imported GoDaddy parking A records.
+
+Cloudflare Tunnel: the connector was first mistakenly installed on **Windows** (`cloudflared.exe`); reinstalled on the server (token-managed, 4 QUIC conns to ams). The new "Networking → Tunnels" UI hid the public-hostname step, so the ingress (`krypredictor.com → http://localhost:80`) + the apex DNS CNAME (`→ <tunnel>.cfargotunnel.com`, proxied) were set **via the Cloudflare API** (after the user supplied a scoped token; needed two tries — first token lacked Account:Cloudflare Tunnel:Edit).
+
+**Cloudflare Access (Zero Trust) requires a billable payment method** the user couldn't add. Pivoted the auth model entirely: **nginx basic-auth** on the box in front of Streamlit. Chain: `browser → Cloudflare TLS → tunnel → nginx:80 (htpasswd) → streamlit:8501`. Zero cost, no Zero Trust. (Login: user `koray`, password generated server-side.) This supersedes the spec's Q5 = Cloudflare Access decision. The UI's `auth.py` Cloudflare-Access header reader falls back to dev-mode (single user), which is fine behind the nginx gate.
+
+### §29.4 Split-brain discovered + sync bridge (commit `29a7697`)
+Phase-D smoke scan ran clean (343 predictions, Telegram + report) but **PG row count didn't move**. Root cause: the entire prediction pipeline (`storage/predictions_db.py`, and validate/recalibrate/metrics in `jobs.py`) writes/reads **SQLite**; only the UI reads **PG**. The UI-build migration (§26 Task 1) was a one-time port + UI-side PG reads; the **writer was never converted**. Spec §10 had flagged the scripts as SQLite-needing-PG-changes, so this was a known-deferred gap that the cutover hit head-on.
+
+Surfaced the full scope to the user: **48 files** touch SQLite (~12 core src, ~15 scripts, ~20 tests that build tmp `.db` fixtures and would need a local PG test harness). A full PG conversion is a v1.1 project, not a cutover step. User chose the **bridge**: `scripts/sync_sqlite_to_pg.py` mirrors SQLite→PG on a systemd timer every 10 min. Crucially it **UPSERTs** (the one-time migrator is insert-only), so a validated prediction's `status` flip propagates — verified live with a reversible `pending→expired→pending` round-trip. `predictions_features` stays insert-only (immutable, append-only). 6 unit tests for the conflict-clause builder; suite **471**.
+
+### §29.5 End state
+- All 4 services `active`, 0 restarts: scheduler (6 cron jobs, UTC), ui (127.0.0.1:8501), intel-bridge, cloudflared. Sync timer armed (next :00/:10/…).
+- `https://krypredictor.com` live: no-auth → 401, auth → 200 (Streamlit). PG 1382 predictions (343 today). Mem 848/3916 MB, disk 9%.
+- Windows Task Scheduler **disabled (not yet uninstalled)** — kept as a one-command rollback fallback until the server fires its first full 06:00 UTC cycle (2026-06-06). Final decommission (cutover Phase E Steps 31–32) deferred to after that proves out.
+- Data flow end-to-end: scheduler writes SQLite → sync timer (≤10 min) → PG → UI. Daily 06:00 predict + 06:30 validate both propagate to the UI automatically.
+
+### §29.6 Open follow-ups
+1. **Confirm tomorrow's 06:00 UTC server cycle** fires (Telegram heartbeat from the box), then uninstall the Windows task (Phase E).
+2. **v1.1 — convert pipeline to PG-native** (retire the bridge). Proper brainstorm + plan + TDD; needs a PG test harness (pytest-postgresql / testcontainers) for the ~20 SQLite-fixture tests.
+3. UI Task 10 (smoke + `v1.0` tag) — partially satisfied by this live deploy; formal tag pending the PG-native milestone or a conscious decision to tag v1.0 with the bridge in place.
+4. Day-14 v0.3 ship still tracks against shadow rows (684 + daily), now accumulating reliably on the always-on box.
+
+---
+
+*End of session journal. 2026-06-04 + 2026-06-05 + 2026-06-06 cutover.*

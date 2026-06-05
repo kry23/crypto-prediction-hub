@@ -4,6 +4,12 @@ All notable changes to crypto-predictor are documented here. Format follows [Kee
 
 ## [Unreleased — v0.2 polish]
 
+### Infrastructure
+- **2026-06-05/06 — Cutover to cloud (Hostinger KVM VPS, `krypredictor.com`)**. Migrated the scheduler + data + UI off the laptop-bound Windows Task Scheduler onto an always-on Ubuntu 24.04 box: PostgreSQL 16, systemd units (scheduler + ui + intel-bridge + cloudflared), Cloudflare Tunnel. SQLite→PG data migration preserved all shadow rows (684) — the v0.3 14-day clock kept ticking through the move.
+  - Auth: Cloudflare Access (Zero Trust) requires a billable payment method, so the UI is gated by **nginx basic-auth** behind the tunnel instead (`tunnel → nginx:80 → streamlit:8501`). Zero-cost, no Zero Trust dependency.
+  - Secrets: single `/etc/crypto-predictor/secrets.env`; `data/secrets.env` is a symlink to it so both `load_secrets()` (file read) and systemd `EnvironmentFile=` see one source.
+- `29a7697` — **SQLite→PG sync bridge** (`scripts/sync_sqlite_to_pg.py` + systemd timer, every 10 min). The pipeline still writes SQLite; the UI reads PG. The bridge UPSERTs so validation status changes propagate (not just inserts). Interim until the pipeline is converted to PG natively (planned v1.1).
+
 ### Fixed
 - `8ebbc52` — NewsAPI fetcher: ISO datetime `from` param returns 0 articles; switched to `YYYY-MM-DD` format. Sentiment cache now actually populates on daily scan when `NEWSAPI_API_KEY` is set.
 
