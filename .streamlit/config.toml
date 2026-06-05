@@ -1,0 +1,13 @@
+# "Midnight Desk" — refined dark trading-desk theme for krypredictor.com.
+# Palette here; font loading + component polish live in
+# src/crypto_predictor/ui/theme.py (injected CSS). Streamlit reads this from
+# the working directory (/opt/crypto-predictor) at startup.
+
+[theme]
+base = "dark"
+primaryColor = "#2DD4BF"            # teal accent — kept clear of the green/red
+                                     # used for correct/incorrect & long/short
+backgroundColor = "#0D1220"         # deep slate-navy ground
+secondaryBackgroundColor = "#161D2E" # panels, sidebar, cards
+textColor = "#E6EDF3"               # cool near-white
+font = "IBM Plex Sans, sans-serif"  # loaded via @import in theme.py

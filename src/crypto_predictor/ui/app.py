@@ -6,6 +6,7 @@ from __future__ import annotations
 import streamlit as st
 
 from crypto_predictor.ui.auth import require_auth
+from crypto_predictor.ui.theme import inject_theme
 
 
 def main() -> None:
@@ -15,6 +16,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="collapsed",
     )
+    inject_theme()  # Midnight Desk — must follow set_page_config (first st call)
 
     email = require_auth()
 
