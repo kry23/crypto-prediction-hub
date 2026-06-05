@@ -17,6 +17,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from crypto_predictor.ui.aggrid_helpers import render_table
 from crypto_predictor.ui.auth import require_auth
 from crypto_predictor.ui.db import get_conn
 from crypto_predictor.ui.queries import (
@@ -141,7 +142,7 @@ st.subheader("Breakdown by regime × flag")
 if data["breakdown"]:
     bdf = pd.DataFrame(data["breakdown"])
     bdf["hit_rate"] = (bdf["hit_rate"] * 100).round(1).astype(str) + "%"
-    st.dataframe(bdf, use_container_width=True, hide_index=True)
+    render_table(bdf, key="tbl_breakdown")
 else:
     st.caption("No breakdown rows.")
 

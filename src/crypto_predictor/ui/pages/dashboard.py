@@ -7,6 +7,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from crypto_predictor.ui.aggrid_helpers import render_table
 from crypto_predictor.ui.auth import require_auth
 from crypto_predictor.ui.db import get_conn
 from crypto_predictor.ui.queries import todays_slate
@@ -41,7 +42,7 @@ st.caption(
 st.divider()
 
 
-def _render_prediction_table(rows: list[dict], *, prob_label: str) -> None:
+def _render_prediction_table(rows: list[dict], *, prob_label: str, key: str) -> None:
     """Shared renderer for the long/short/wild-card tables."""
     df = pd.DataFrame(rows)
     df["composite_bp"] = df["composite_score"] * 10000
@@ -52,27 +53,27 @@ def _render_prediction_table(rows: list[dict], *, prob_label: str) -> None:
             "composite_bp": "Composite (bp)",
         }
     )
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    render_table(display, color_cols=["Exp.ret", "Composite (bp)"], key=key)
 
 
 # --- Top long --------------------------------------------------------------
 st.subheader("📈 Top long")
 if data["top_long"]:
-    _render_prediction_table(data["top_long"], prob_label="P↑")
+    _render_prediction_table(data["top_long"], prob_label="P↑", key="tbl_long")
 else:
     st.info("No long predictions today.")
 
 # --- Top short -------------------------------------------------------------
 st.subheader("📉 Top short")
 if data["top_short"]:
-    _render_prediction_table(data["top_short"], prob_label="P↓")
+    _render_prediction_table(data["top_short"], prob_label="P↓", key="tbl_short")
 else:
     st.info("No short predictions today.")
 
 # --- Wild cards ------------------------------------------------------------
 st.subheader("🃏 Wild cards")
 if data["wild_cards"]:
-    _render_prediction_table(data["wild_cards"], prob_label="P")
+    _render_prediction_table(data["wild_cards"], prob_label="P", key="tbl_wild")
 else:
     st.info("No wild cards today.")
 
@@ -80,6 +81,6 @@ else:
 st.subheader("📌 Active manual annotations")
 if data["active_annotations"]:
     df_ann = pd.DataFrame(data["active_annotations"])
-    st.dataframe(df_ann, use_container_width=True, hide_index=True)
+    render_table(df_ann, key="tbl_annotations")
 else:
     st.caption("No open positions. The annotations form ships in v1.2.")

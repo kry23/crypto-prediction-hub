@@ -22,6 +22,7 @@ import streamlit as st
 import yaml
 
 from crypto_predictor.config.scheduler_config import load_scheduler_config
+from crypto_predictor.ui.aggrid_helpers import render_table
 from crypto_predictor.ui.auth import require_auth
 from crypto_predictor.ui.systemd_helpers import (
     next_jobs,
@@ -63,7 +64,7 @@ else:
 st.subheader("Next jobs")
 jobs = next_jobs()
 if jobs:
-    st.dataframe(jobs, use_container_width=True, hide_index=True)
+    render_table(jobs, key="tbl_next_jobs")
 else:
     st.caption(
         "Cannot reach scheduler /jobs endpoint. Either the scheduler "
