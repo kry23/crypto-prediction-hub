@@ -1,0 +1,11 @@
+[Unit]
+Description=Run crypto-predictor backup daily at 07:00 UTC
+
+[Timer]
+# 07:00 UTC — after the 06:00 predict + 06:30 validate + ~06:50 bridge sync,
+# so the dump captures the full daily cycle.
+OnCalendar=*-*-* 07:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
