@@ -14,34 +14,55 @@ from typing import Iterable, Sequence
 import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
-# AG-Grid is themed via CSS custom properties; override them on the theme class
-# to repaint the (light) "alpine" theme into Midnight Desk dark.
+# Repaint the (light) "alpine" theme into Midnight Desk dark. CSS *variables*
+# alone proved unreliable in the bundled build, so we also set explicit
+# background/colour on the concrete elements (header, rows, cells) with the
+# theme-class prefix — that always wins over the bundled light theme.
+_BG = "#161D2E"
+_BG_ODD = "#131A28"
+_HEADER_BG = "#1B2438"
+_TEXT = "#E6EDF3"
+_MUTED = "#8B98AD"
+_BORDER = "rgba(139, 152, 173, 0.16)"
+_HOVER = "rgba(45, 212, 191, 0.10)"
+
 _AG_DARK_CSS: dict[str, dict[str, str]] = {
+    # CSS-var layer (works on builds that honour it) ...
     ".ag-theme-alpine": {
-        "--ag-background-color": "#161D2E",
-        "--ag-odd-row-background-color": "#131A28",
-        "--ag-header-background-color": "#1B2438",
-        "--ag-foreground-color": "#E6EDF3",
-        "--ag-header-foreground-color": "#8B98AD",
-        "--ag-border-color": "rgba(139, 152, 173, 0.18)",
-        "--ag-row-border-color": "rgba(139, 152, 173, 0.10)",
-        "--ag-row-hover-color": "rgba(45, 212, 191, 0.10)",
-        "--ag-selected-row-background-color": "rgba(45, 212, 191, 0.16)",
-        "--ag-range-selection-border-color": "#2DD4BF",
+        "--ag-background-color": _BG,
+        "--ag-odd-row-background-color": _BG_ODD,
+        "--ag-header-background-color": _HEADER_BG,
+        "--ag-foreground-color": _TEXT,
+        "--ag-header-foreground-color": _MUTED,
+        "--ag-border-color": _BORDER,
+        "--ag-row-hover-color": _HOVER,
         "--ag-font-family": "'IBM Plex Mono', ui-monospace, monospace",
         "--ag-font-size": "13px",
-        "--ag-header-column-separator-display": "none",
+        "background-color": _BG,
     },
-    ".ag-root-wrapper": {
-        "border": "1px solid rgba(139, 152, 173, 0.18)",
-        "border-radius": "10px",
-        "overflow": "hidden",
+    # ... and an explicit-element layer that always wins.
+    ".ag-theme-alpine .ag-root-wrapper": {
+        "background-color": _BG, "color": _TEXT,
+        "border": f"1px solid {_BORDER}", "border-radius": "10px",
     },
-    ".ag-header-cell-label": {
-        "font-weight": "600",
-        "letter-spacing": "0.04em",
-        "text-transform": "uppercase",
-        "font-size": "11px",
+    ".ag-theme-alpine .ag-header": {
+        "background-color": _HEADER_BG, "border-bottom": f"1px solid {_BORDER}",
+    },
+    ".ag-theme-alpine .ag-header-cell": {"color": _MUTED},
+    ".ag-theme-alpine .ag-header-cell-label": {
+        "font-weight": "600", "letter-spacing": "0.04em",
+        "text-transform": "uppercase", "font-size": "11px", "color": _MUTED,
+    },
+    ".ag-theme-alpine .ag-row": {
+        "background-color": _BG, "color": _TEXT,
+        "border-bottom": f"1px solid rgba(139,152,173,0.08)",
+    },
+    ".ag-theme-alpine .ag-row-odd": {"background-color": _BG_ODD},
+    ".ag-theme-alpine .ag-row-hover": {"background-color": _HOVER},
+    ".ag-theme-alpine .ag-cell": {"color": _TEXT, "border": "none"},
+    ".ag-theme-alpine .ag-paging-panel": {
+        "background-color": _HEADER_BG, "color": _MUTED,
+        "border-top": f"1px solid {_BORDER}",
     },
 }
 
@@ -78,7 +99,9 @@ def render_table(
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(
         sortable=True, resizable=True, filter=False,
-        suppressMenu=True, cellStyle={"fontFamily": "'IBM Plex Mono', monospace"},
+        suppressMenu=True,                 # AG-Grid < 31
+        suppressHeaderMenuButton=True,      # AG-Grid >= 31 (funnel/menu icon)
+        cellStyle={"fontFamily": "'IBM Plex Mono', monospace"},
     )
     for col in color_cols:
         if col in df.columns:
