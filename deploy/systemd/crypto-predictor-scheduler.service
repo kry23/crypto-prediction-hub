@@ -1,0 +1,19 @@
+[Unit]
+Description=Crypto Predictor — APScheduler (predict + ingest + validate + backup crons)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=crypto-predictor
+Group=crypto-predictor
+WorkingDirectory=/opt/crypto-predictor
+EnvironmentFile=/etc/crypto-predictor/secrets.env
+ExecStart=/opt/crypto-predictor/venv/bin/python scripts/run_scheduler.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

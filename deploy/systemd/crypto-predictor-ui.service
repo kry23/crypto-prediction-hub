@@ -1,0 +1,24 @@
+[Unit]
+Description=Crypto Predictor — Streamlit UI (predictor.kry.app)
+After=network.target postgresql.service crypto-predictor-scheduler.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=crypto-predictor
+Group=crypto-predictor
+WorkingDirectory=/opt/crypto-predictor
+EnvironmentFile=/etc/crypto-predictor/secrets.env
+ExecStart=/opt/crypto-predictor/venv/bin/streamlit run \
+    src/crypto_predictor/ui/app.py \
+    --server.port 8501 \
+    --server.address 127.0.0.1 \
+    --server.headless true \
+    --browser.gatherUsageStats false
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
