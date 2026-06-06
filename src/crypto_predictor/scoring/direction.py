@@ -59,31 +59,56 @@ MOMENTUM_FLIP_BY_REGIME: dict[str, float] = {
     "BEAR": 1.0,
 }
 
+# Falling-knife guard: the CHOP mean-reversion flip (-1.0) assumes a pullback
+# will bounce. Below this momentum level the drop is a crash, not a dip —
+# flipping it would turn the hardest-falling coins into the strongest longs.
+# Shadow data (2026-06, CHOP) showed exactly that: such longs hit only 8.5%.
+# Tunable; refine as cross-regime shadow data accumulates.
+FALLING_KNIFE_THRESHOLD: float = -0.5
+
+
+def _effective_momentum_flip(mom: float, regime: str) -> float:
+    """Regime momentum flip, with the falling-knife guard applied.
+
+    Returns the regime's base flip (``MOMENTUM_FLIP_BY_REGIME``) except in a
+    mean-reversion regime (flip ``-1.0``) when ``mom`` is below
+    ``FALLING_KNIFE_THRESHOLD`` — there the flip is suppressed to ``0.0`` so a
+    crashing coin is not reversed into a long. Non-flip regimes (flip ``1.0``)
+    are never affected.
+    """
+    flip = MOMENTUM_FLIP_BY_REGIME.get(regime, 1.0)
+    if flip == -1.0 and mom < FALLING_KNIFE_THRESHOLD:
+        return 0.0
+    return flip
+
 
 def compute_direction_raw_for_regime(feats: dict, regime: str) -> float:
-    """Pick regime-specific weights and apply tilt-sign flip, then compute direction."""
+    """Pick regime-specific weights and apply the (guarded) tilt-sign flip."""
     weights = DEFAULT_REGIME_WEIGHTS.get(regime, DEFAULT_WEIGHTS)
     # Normalize to sum to 1.0 (some weights may be 0 if their cache is empty)
     total = sum(weights.values())
     if total > 0:
         weights = {k: v / total for k, v in weights.items()}
 
-    momentum_flip = MOMENTUM_FLIP_BY_REGIME.get(regime, 1.0)
-    if momentum_flip != 1.0:
-        # Compute manually with the flipped momentum tilt
-        mcap_w = float(feats.get("mcap_rank_weight", 1.0) or 1.0)
-        btc_corr = float(feats.get("coin_btc_corr_30d", 0.0) or 0.0)
-        global_attenuation = max(0.0, 1.0 - abs(btc_corr))
-        raw = (
-            weights["momentum"]  * tilt_momentum(feats) * momentum_flip +
-            weights["perp"]      * tilt_perp(feats) +
-            weights["volume"]    * tilt_volume(feats) +
-            weights["technical"] * tilt_technical(feats) +
-            weights["sentiment"] * tilt_sentiment(feats) * mcap_w +
-            weights["global"]    * tilt_global(feats) * global_attenuation
-        )
-        return max(-1.0, min(1.0, raw))
-    return compute_direction_raw(feats, weights=weights)
+    mom = tilt_momentum(feats)
+    momentum_flip = _effective_momentum_flip(mom, regime)
+    if momentum_flip == 1.0:
+        return compute_direction_raw(feats, weights=weights)
+
+    # Flipped (-1.0 mean-reversion) or guarded (0.0 falling knife): compute
+    # manually with the adjusted momentum contribution.
+    mcap_w = float(feats.get("mcap_rank_weight", 1.0) or 1.0)
+    btc_corr = float(feats.get("coin_btc_corr_30d", 0.0) or 0.0)
+    global_attenuation = max(0.0, 1.0 - abs(btc_corr))
+    raw = (
+        weights["momentum"]  * mom * momentum_flip +
+        weights["perp"]      * tilt_perp(feats) +
+        weights["volume"]    * tilt_volume(feats) +
+        weights["technical"] * tilt_technical(feats) +
+        weights["sentiment"] * tilt_sentiment(feats) * mcap_w +
+        weights["global"]    * tilt_global(feats) * global_attenuation
+    )
+    return max(-1.0, min(1.0, raw))
 
 
 def compute_direction_raw(feats: dict, *,

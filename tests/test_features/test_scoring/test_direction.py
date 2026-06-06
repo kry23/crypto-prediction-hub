@@ -85,3 +85,49 @@ def test_data_driven_weights_sum_to_one_after_normalization():
     for regime, weights in DEFAULT_REGIME_WEIGHTS.items():
         total = sum(weights.values())
         assert 0.6 <= total <= 1.0, f"{regime}: weights sum to {total} (must be between 0.6 and 1.0)"
+
+
+# --- Falling-knife guard on the CHOP momentum-flip --------------------------
+# Shadow data (2026-06) showed CHOP's mean-reversion flip (-1.0) turning the
+# hardest-falling coins (ret_4h_z ~ -1.6) into the highest-confidence longs,
+# which then kept falling (8.5% hit). Mean-reversion is for mild pullbacks, not
+# crashes: below FALLING_KNIFE_THRESHOLD the flip must be suppressed.
+
+
+def test_chop_flip_suppressed_for_falling_knife():
+    from crypto_predictor.scoring.direction import _effective_momentum_flip
+    # Severe drop: must NOT be flipped into a long.
+    assert _effective_momentum_flip(-0.9, "CHOP") == 0.0
+
+
+def test_chop_flip_preserved_for_mild_pullback():
+    from crypto_predictor.scoring.direction import _effective_momentum_flip
+    # Mild pullback: mean-reversion still applies.
+    assert _effective_momentum_flip(-0.2, "CHOP") == -1.0
+
+
+def test_chop_flip_preserved_for_positive_momentum():
+    from crypto_predictor.scoring.direction import _effective_momentum_flip
+    # A pump (positive momentum) still gets flipped (CHOP shorts it).
+    assert _effective_momentum_flip(0.8, "CHOP") == -1.0
+
+
+def test_non_flip_regimes_ignore_falling_knife_guard():
+    from crypto_predictor.scoring.direction import _effective_momentum_flip
+    # BULL/BEAR never flip momentum, so the guard never changes them.
+    assert _effective_momentum_flip(-0.9, "BULL") == 1.0
+    assert _effective_momentum_flip(-0.9, "BEAR") == 1.0
+
+
+def test_chop_falling_knife_not_longed_harder_than_mild_pullback():
+    """The bug, encoded: a crashing coin must NOT score a stronger long than a
+    mild dip under CHOP mean-reversion."""
+    from crypto_predictor.scoring.direction import compute_direction_raw_for_regime
+    base = {"mcap_rank_weight": 1.0, "coin_btc_corr_30d": 0.5}
+    mild = {**base, "ret_15m_z": -0.3, "ret_1h_z": -0.3, "ret_4h_z": -0.3,
+            "ret_24h_z": -0.3, "ret_7d_z": -0.3, "mom_consistency": 0.5}
+    knife = {**base, "ret_15m_z": -3.0, "ret_1h_z": -3.0, "ret_4h_z": -3.0,
+             "ret_24h_z": -3.0, "ret_7d_z": -3.0, "mom_consistency": 0.5}
+    raw_mild = compute_direction_raw_for_regime(mild, "CHOP")
+    raw_knife = compute_direction_raw_for_regime(knife, "CHOP")
+    assert raw_mild > raw_knife
