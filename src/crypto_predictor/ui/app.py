@@ -26,6 +26,7 @@ def main() -> None:
             "pages/dashboard.py", title="Dashboard", icon="📊", default=True
         ),
         st.Page("pages/track_record.py", title="Track record", icon="📈"),
+        st.Page("pages/journal.py", title="Journal", icon="📓"),
         st.Page("pages/operator.py", title="Operator", icon="🛠"),
         st.Page("pages/ask_claude.py", title="Ask Claude", icon="💬"),
     ]
