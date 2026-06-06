@@ -64,6 +64,16 @@ User chose remedy B (cap CHOP mean-reversion on extreme-negative momentum). Buil
 3. **Cross-regime data** before any live promote; revisit remedies A/C if the long side is still weak in true chop.
 4. **C7 (v1.1)** — PG-native pipeline conversion (retire the SQLite→PG bridge).
 
+## §35 UI tooling: Journal page, journaling hook, Architecture diagram
+
+Three user-driven additions after the model fix:
+
+- **Journal page** (`1f3fd9d`, spec `d23f932`) — new **📓 Journal** tab renders `docs/sessions/*.md` (date from filename, title from first H1) newest-first plus CHANGELOG, each in a collapsible expander (newest expanded). Pure `journal_loader.load_log_entries()` with **11 TDD tests**; thin page. Behind the existing nginx auth (journals hold server internals, so the page must stay gated).
+- **Journaling reminder hook** (global `~/.claude/`, NOT in the repo) — a `Stop` hook (`~/.claude/hooks/journal-reminder.sh` + `~/.claude/settings.json`) that nudges (non-blocking `systemMessage`, fail-open) whenever crypto-predictor has commits newer than the last `docs/sessions/` entry. Set up because the user kept manually reminding me to journal — now harness-enforced. **This very entry was prompted by that hook firing — dogfood success.**
+- **Architecture page** (`9e626cf`) — new **🗺 Architecture** tab, `st.graphviz_chart` DOT of the live system: request path (browser → Cloudflare → tunnel → nginx → Streamlit → PG) + pipeline (scheduler → SQLite source-of-truth → 10-min sync bridge → PG mirror), highlighting the v1.0 SQLite/PG split and the v1.1 bridge retirement. No new dependency (DOT string).
+
+Nav is now **6 tabs**: Dashboard · Track Record · Journal · Architecture · Operator · Ask Claude. Suite **476 → 487** (+11 journal_loader).
+
 ---
 
-*Commits this day: `0acfdbd` plotly dep · `6415c03`/`f8a8c39`/`0f5a3c4` AG-Grid theming · `94d8b23` regime fix · `e3bcdd6` falling-knife guard. v1.0 tag pushed. Suite 476 green.*
+*Commits this day: `0acfdbd` plotly dep · `6415c03`/`f8a8c39`/`0f5a3c4` AG-Grid theming · `94d8b23` regime fix · `e3bcdd6` falling-knife guard · `1f3fd9d` Journal page · `9e626cf` Architecture page. v1.0 tag pushed. Suite 487 green.*
